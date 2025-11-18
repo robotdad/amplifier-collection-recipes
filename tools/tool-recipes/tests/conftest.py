@@ -1,9 +1,8 @@
 """Shared test fixtures for models tests."""
 
 import pytest
-from pathlib import Path
-from amplifier_module_tool_recipes.models import Step, Recipe
-
+from amplifier_module_tool_recipes.models import Recipe
+from amplifier_module_tool_recipes.models import Step
 
 # ===== STEP FIXTURES =====
 

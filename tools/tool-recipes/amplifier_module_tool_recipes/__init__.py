@@ -4,7 +4,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from amplifier_core import ModuleCoordinator, ToolResult
+from amplifier_core import ModuleCoordinator
+from amplifier_core import ToolResult
 
 from .executor import RecipeExecutor
 from .models import Recipe
@@ -124,17 +125,16 @@ Example:
         try:
             if operation == "execute":
                 return await self._execute_recipe(input)
-            elif operation == "resume":
+            if operation == "resume":
                 return await self._resume_recipe(input)
-            elif operation == "list":
+            if operation == "list":
                 return await self._list_sessions(input)
-            elif operation == "validate":
+            if operation == "validate":
                 return await self._validate_recipe(input)
-            else:
-                return ToolResult(
-                    success=False,
-                    error={"message": f"Unknown operation: {operation}"},
-                )
+            return ToolResult(
+                success=False,
+                error={"message": f"Unknown operation: {operation}"},
+            )
         except Exception as e:
             logger.error(f"Recipe tool error: {e}", exc_info=True)
             return ToolResult(
@@ -209,9 +209,9 @@ Example:
                 error={"message": f"Session not found: {session_id}"},
             )
 
-        # Load session state
+        # Validate session exists
         try:
-            state = self.session_manager.load_state(session_id, project_path)
+            _ = self.session_manager.load_state(session_id, project_path)
         except Exception as e:
             return ToolResult(success=False, error={"message": f"Failed to load session: {str(e)}"})
 
@@ -299,15 +299,14 @@ Example:
                         "warnings": validation.warnings,
                     },
                 )
-            else:
-                return ToolResult(
-                    success=False,
-                    error={
-                        "message": "Recipe validation failed",
-                        "errors": validation.errors,
-                        "warnings": validation.warnings,
-                    },
-                )
+            return ToolResult(
+                success=False,
+                error={
+                    "message": "Recipe validation failed",
+                    "errors": validation.errors,
+                    "warnings": validation.warnings,
+                },
+            )
 
         except Exception as e:
             return ToolResult(

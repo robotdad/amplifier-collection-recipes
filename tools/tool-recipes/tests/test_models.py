@@ -1,11 +1,11 @@
 """Comprehensive tests for models.py - Recipe and Step validation and YAML loading."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 import yaml
-
-from amplifier_module_tool_recipes.models import Step, Recipe
-
+from amplifier_module_tool_recipes.models import Recipe
+from amplifier_module_tool_recipes.models import Step
 
 # ============================================================================
 # PRIORITY 1: CRITICAL PATH TESTS
@@ -727,6 +727,7 @@ class TestRecipeGetStep:
         step2 = Step(id="duplicate", agent="second", prompt="Second")
         recipe = Recipe(name="test", description="Test", version="1.0.0", steps=[step1, step2])
         result = recipe.get_step("duplicate")
+        assert result is not None
         assert result.agent == "first"  # Gets first occurrence
 
     def test_get_step_from_multi_step_recipe(self, multi_step_recipe):
@@ -802,7 +803,7 @@ steps:
     agent: improver
     prompt: Generate improvements
     output: improvements
-    depends_on: [diagnosis]
+    depends_on: [diagnose]
     timeout: 600
 """
         )
@@ -944,4 +945,5 @@ steps:
         )
         errors = step.validate()
         assert errors == []
+        assert step.agent_config is not None
         assert step.agent_config["nested"]["key"] == "value"

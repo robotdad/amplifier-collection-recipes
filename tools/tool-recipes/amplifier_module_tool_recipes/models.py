@@ -130,11 +130,22 @@ class Recipe:
         if self.name and not self.name.replace("-", "").replace("_", "").isalnum():
             errors.append("Recipe name must be alphanumeric with hyphens/underscores")
 
-        # Version format (basic semver check)
+        # Version format (strict semver check - MAJOR.MINOR.PATCH only)
         if self.version:
-            parts = self.version.split(".")
-            if len(parts) < 3:
-                errors.append("Recipe version must follow semver format (MAJOR.MINOR.PATCH)")
+            # Check for v prefix (not allowed)
+            if self.version.startswith("v"):
+                errors.append("Recipe version must follow semver format without 'v' prefix (use '1.0.0' not 'v1.0.0')")
+            # Check for pre-release or build metadata (not allowed for simplicity)
+            elif "-" in self.version or "+" in self.version:
+                errors.append(
+                    "Recipe version must follow simple semver format (MAJOR.MINOR.PATCH only, no pre-release tags)"
+                )
+            else:
+                parts = self.version.split(".")
+                if len(parts) != 3:
+                    errors.append("Recipe version must follow semver format (MAJOR.MINOR.PATCH)")
+                elif not all(part.isdigit() for part in parts):
+                    errors.append("Recipe version parts must be numeric (e.g., '1.0.0' not '1.a.0')")
 
         # Steps
         if not self.steps:
