@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amplifier-collection-recipes"
+version = "0.1.0"
+description = "Multi-step AI agent orchestration for repeatable workflows"
+readme = "../README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[tool.amplifier.collection]
+author = "Microsoft Amplifier Team"
+capabilities = [
+    "multi-step-workflows",
+    "agent-orchestration",
+    "recipe-execution",
+    "conversational-authoring"
+]
+modules = [
+    { type = "tool", path = "tools/tool-recipes" },
+]
+agents = [
+    { name = "recipe-author", path = "agents/recipe-author.md" },
+]
