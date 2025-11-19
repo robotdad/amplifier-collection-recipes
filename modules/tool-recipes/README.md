@@ -19,7 +19,7 @@ amplifier collection add git+https://github.com/microsoft/amplifier-collection-r
 For standalone development:
 
 ```bash
-cd tools/tool-recipes
+cd modules/tool-recipes
 uv pip install -e .
 ```
 

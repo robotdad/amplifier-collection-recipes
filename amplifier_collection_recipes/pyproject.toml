@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "amplifier-collection-recipes"
+name = "recipes"
 version = "0.1.0"
 description = "Multi-step AI agent orchestration for repeatable workflows"
 readme = "../README.md"
@@ -17,10 +17,4 @@ capabilities = [
     "agent-orchestration",
     "recipe-execution",
     "conversational-authoring"
-]
-modules = [
-    { type = "tool", path = "tools/tool-recipes" },
-]
-agents = [
-    { name = "recipe-author", path = "agents/recipe-author.md" },
 ]

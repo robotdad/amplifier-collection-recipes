@@ -11,11 +11,11 @@ recursive-include agents *
 recursive-include examples *
 recursive-include templates *
 recursive-include docs *
-recursive-include tools *
+recursive-include modules *
 recursive-include amplifier_collection_recipes *.py *.toml
 graft agents
 graft examples
 graft templates
 graft docs
-graft tools
+graft modules
 graft amplifier_collection_recipes
