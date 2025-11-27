@@ -74,10 +74,10 @@ def check_variable_references(recipe: Recipe) -> list[str]:
             if "." in var:
                 prefix = var.split(".")[0]
                 if prefix not in reserved:
-                    errors.append(f"Step '{step.id}': Variable {{{{{{var}}}}}} references unknown namespace '{prefix}'")
+                    errors.append(f"Step '{step.id}': Variable {{{{{var}}}}} references unknown namespace '{prefix}'")
             elif var not in available:
                 errors.append(
-                    f"Step '{step.id}': Variable {{{{{{var}}}}}} is not defined. "
+                    f"Step '{step.id}': Variable {{{{{var}}}}} is not defined. "
                     f"Available variables: {', '.join(sorted(available))}"
                 )
 
