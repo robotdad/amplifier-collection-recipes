@@ -1,0 +1,78 @@
+# Conditional Workflow Example
+# Demonstrates conditional step execution based on context variables
+#
+# This recipe shows how to route processing through different paths
+# based on results from previous steps.
+#
+# Run with:
+#   amplifier run "execute conditional-workflow.yaml with input_data='complex dataset'"
+
+name: "conditional-workflow"
+description: "Route processing based on classification results"
+version: "1.0.0"
+author: "Amplifier Recipes Collection"
+tags: ["tutorial", "conditional", "routing"]
+
+context:
+  input_data: ""  # Required: data to classify and process
+
+steps:
+  # Step 1: Classify the input data
+  - id: "classify"
+    agent: "zen-architect"
+    mode: "ANALYZE"
+    prompt: |
+      Classify the following input into exactly ONE category:
+      - simple: Straightforward, single-step processing
+      - complex: Requires multi-step analysis
+
+      Respond with ONLY the category name (simple or complex).
+
+      Input: {{input_data}}
+    output: "classification"
+
+  # Step 2a: Simple processing path
+  - id: "simple-process"
+    condition: "{{classification}} == 'simple'"
+    agent: "zen-architect"
+    prompt: |
+      Process this simple input directly:
+      {{input_data}}
+
+      Provide a concise summary.
+    output: "processing_result"
+
+  # Step 2b: Complex processing - first stage
+  - id: "complex-analyze"
+    condition: "{{classification}} == 'complex'"
+    agent: "zen-architect"
+    mode: "ANALYZE"
+    prompt: |
+      Perform detailed analysis of this complex input:
+      {{input_data}}
+
+      Break down into components and identify relationships.
+    output: "detailed_analysis"
+
+  # Step 2c: Complex processing - second stage
+  - id: "complex-synthesize"
+    condition: "{{classification}} == 'complex'"
+    agent: "zen-architect"
+    prompt: |
+      Synthesize the analysis into actionable insights:
+      {{detailed_analysis}}
+
+      Provide structured recommendations.
+    output: "processing_result"
+
+  # Step 3: Generate final report (always runs)
+  - id: "report"
+    agent: "zen-architect"
+    prompt: |
+      Generate a final report summarizing:
+
+      Classification: {{classification}}
+      Processing Result: {{processing_result}}
+
+      Format as a brief executive summary.
+    output: "final_report"

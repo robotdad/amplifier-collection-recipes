@@ -1,16 +1,23 @@
 name: "code-review-comprehensive"
-description: "Multi-stage code review with analysis, issue identification, improvement suggestions, and validation"
-version: "1.0.0"
+description: "Multi-stage code review with conditional execution based on issue severity"
+version: "1.1.0"
 author: "Amplifier Recipes Collection"
-tags: ["code-review", "quality", "analysis", "python"]
+tags: ["code-review", "quality", "analysis", "python", "conditional"]
 
-# This recipe performs comprehensive code review in four stages:
+# This recipe performs comprehensive code review with smart routing:
 # 1. Analyze code structure and patterns
 # 2. Identify specific issues and anti-patterns
-# 3. Generate concrete improvement suggestions
-# 4. Validate suggestions for feasibility
+# 3. Assess overall severity (none/low/medium/high/critical)
+# 4. If issues found: generate improvements (skipped for clean code)
+# 5. For critical/high: validate suggestions (skipped for lower severity)
+# 6. For clean code: quick approval path
 #
-# Typical runtime: 5-10 minutes
+# Conditional execution saves time by skipping unnecessary steps:
+# - Clean code (severity=none) → quick-approval path
+# - Low/medium issues → suggestions only (no deep validation)
+# - Critical/high issues → full review with validation
+#
+# Typical runtime: 2-10 minutes (depends on code quality)
 # Required agents: zen-architect
 #
 # Usage:
@@ -55,15 +62,40 @@ steps:
       - Impact on maintainability
 
       Focus on issues that genuinely impact quality, not style preferences.
+
+      If the code is clean with no significant issues, explicitly state:
+      "No significant issues found. Code quality is good."
     output: "identified_issues"
     timeout: 600
+
+  - id: "assess-severity"
+    agent: "developer-expertise:zen-architect"
+    mode: "ANALYZE"
+    prompt: |
+      Based on the identified issues: {{identified_issues}}
+
+      Determine the OVERALL severity level for this code review.
+
+      Respond with EXACTLY ONE of these words (nothing else):
+      - none (no issues found, code is clean)
+      - low (only minor style or documentation issues)
+      - medium (some issues but code works correctly)
+      - high (significant problems affecting maintainability)
+      - critical (bugs, security issues, or major design flaws)
+
+      Consider the highest severity issue found. If no issues were found,
+      respond with: none
+    output: "severity"
+    timeout: 120
 
   - id: "suggest-improvements"
     agent: "developer-expertise:zen-architect"
     mode: "ARCHITECT"
+    condition: "{{severity}} != 'none'"
     prompt: |
       Given this analysis: {{structure_analysis}}
       And these issues: {{identified_issues}}
+      Overall severity: {{severity}}
 
       Design concrete improvement suggestions for {{file_path}}:
 
@@ -85,11 +117,15 @@ steps:
   - id: "validate-suggestions"
     agent: "developer-expertise:zen-architect"
     mode: "REVIEW"
+    condition: "{{severity}} == 'critical' or {{severity}} == 'high'"
     prompt: |
       Review these improvement suggestions: {{improvement_suggestions}}
 
       For the file: {{file_path}}
       With these issues: {{identified_issues}}
+      Severity level: {{severity}}
+
+      This is a {{severity}}-severity review, so thorough validation is critical.
 
       Validate each suggestion:
 
@@ -108,8 +144,46 @@ steps:
     output: "validated_suggestions"
     timeout: 300
 
-# Example output structure:
-# structure_analysis: Code organization, patterns, complexity assessment
-# identified_issues: List of issues with severity and location
-# improvement_suggestions: Concrete solutions with implementation steps
-# validated_suggestions: Prioritized, feasible action items
+  - id: "quick-approval"
+    agent: "developer-expertise:zen-architect"
+    mode: "REVIEW"
+    condition: "{{severity}} == 'none'"
+    prompt: |
+      Based on this analysis: {{structure_analysis}}
+      And this assessment: {{identified_issues}}
+
+      The code in {{file_path}} appears to be clean with no significant issues.
+
+      Provide a brief approval summary:
+
+      1. Confirm the code quality assessment
+      2. Note any minor suggestions (optional improvements, not requirements)
+      3. Highlight what's done well (patterns worth preserving)
+
+      Keep the response concise - this is the fast-track approval path.
+    output: "approval_summary"
+    timeout: 120
+
+# Example output structure depends on severity:
+#
+# For clean code (severity=none):
+#   structure_analysis: Code organization, patterns, complexity assessment
+#   identified_issues: "No significant issues found..."
+#   severity: "none"
+#   approval_summary: Brief approval with optional minor suggestions
+#   (suggest-improvements and validate-suggestions are SKIPPED)
+#
+# For low/medium severity:
+#   structure_analysis: Code organization, patterns, complexity assessment
+#   identified_issues: List of issues with severity and location
+#   severity: "low" or "medium"
+#   improvement_suggestions: Concrete solutions with implementation steps
+#   (validate-suggestions and quick-approval are SKIPPED)
+#
+# For high/critical severity:
+#   structure_analysis: Code organization, patterns, complexity assessment
+#   identified_issues: List of issues with severity and location
+#   severity: "high" or "critical"
+#   improvement_suggestions: Concrete solutions with implementation steps
+#   validated_suggestions: Prioritized, feasible action items
+#   (quick-approval is SKIPPED)

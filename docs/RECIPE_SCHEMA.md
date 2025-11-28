@@ -164,6 +164,7 @@ Each step represents one agent invocation in the workflow.
   agent: string                 # Required - Agent name or sub-agent config
   mode: string                  # Optional - Agent mode (if agent supports)
   prompt: string                # Required - Prompt template with variables
+  condition: string             # Optional - Expression that must evaluate to true
   output: string                # Optional - Variable name for step result
   agent_config: dict            # Optional - Override agent configuration
   timeout: integer              # Optional - Max execution time (seconds)
@@ -286,6 +287,62 @@ steps:
 - If variable undefined, step fails with clear error
 - Use `context` dict to define required variables upfront
 - Check variable availability with `depends_on`
+
+#### `condition` (optional)
+
+**Type:** string (expression)
+**Purpose:** Skip step if condition evaluates to false.
+
+**Syntax:**
+- Variable references: `{{variable}}` or `{{object.property}}`
+- Comparison operators: `==`, `!=`
+- Boolean operators: `and`, `or`
+- String literals: `'value'` or `"value"`
+
+**Examples:**
+
+Simple equality:
+```yaml
+- id: "critical-fix"
+  condition: "{{severity}} == 'critical'"
+  agent: "auto-fixer"
+  prompt: "Auto-fix critical issues"
+```
+
+With nested variable access:
+```yaml
+- id: "apply-fixes"
+  condition: "{{analysis.severity}} == 'critical'"
+  agent: "fixer"
+  prompt: "Apply fixes for: {{analysis.issues}}"
+```
+
+Compound conditions:
+```yaml
+- id: "deploy"
+  condition: "{{tests_passed}} == 'true' and {{review_approved}} == 'true'"
+  agent: "deployer"
+  prompt: "Deploy to production"
+```
+
+Alternative conditions:
+```yaml
+- id: "escalate"
+  condition: "{{severity}} == 'critical' or {{severity}} == 'high'"
+  agent: "notifier"
+  prompt: "Escalate to on-call team"
+```
+
+**Behavior:**
+- Condition is `true` → Execute step normally
+- Condition is `false` → Skip step, continue to next
+- Undefined variable in condition → **Fail recipe** with clear error
+- Invalid syntax → **Fail recipe** with parse error
+- Skipped step with `output` field → Output variable remains undefined
+
+**Rationale:** Fail fast on errors. Silent skips would mask configuration problems.
+
+See [Condition Expressions](#condition-expressions) for complete syntax reference.
 
 #### `output` (optional)
 
@@ -515,6 +572,153 @@ If variable undefined at runtime:
 
 ---
 
+## Condition Expressions
+
+Step conditions use a simple expression syntax for runtime evaluation.
+
+### Syntax Overview
+
+```
+<expression> := <comparison> | <expression> "and" <expression> | <expression> "or" <expression>
+<comparison> := <value> <operator> <value>
+<operator>   := "==" | "!="
+<value>      := <variable> | <string-literal>
+<variable>   := "{{" identifier ("." identifier)* "}}"
+<string>     := "'" chars "'" | '"' chars '"'
+```
+
+### Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `==` | Equality | `{{status}} == 'approved'` |
+| `!=` | Inequality | `{{status}} != 'pending'` |
+| `and` | Both must be true | `{{a}} == 'x' and {{b}} == 'y'` |
+| `or` | Either can be true | `{{a}} == 'x' or {{b}} == 'y'` |
+
+### Variable References
+
+Variables use the same `{{variable}}` syntax as prompt templates:
+
+```yaml
+# Simple variable
+condition: "{{status}} == 'approved'"
+
+# Nested access
+condition: "{{report.severity}} == 'critical'"
+
+# From step output
+condition: "{{analysis_result}} != 'failed'"
+```
+
+### String Literals
+
+String values must be quoted with single or double quotes:
+
+```yaml
+# Single quotes
+condition: "{{status}} == 'approved'"
+
+# Double quotes
+condition: '{{status}} == "approved"'
+```
+
+### Boolean Logic
+
+Combine conditions with `and` / `or`:
+
+```yaml
+# Both conditions must be true
+condition: "{{security_passed}} == 'true' and {{tests_passed}} == 'true'"
+
+# Either condition can be true
+condition: "{{severity}} == 'critical' or {{severity}} == 'high'"
+
+# Chained conditions (evaluated left to right)
+condition: "{{a}} == 'x' and {{b}} == 'y' or {{c}} == 'z'"
+```
+
+**Note:** Operator precedence is left-to-right. For complex conditions, break into multiple steps.
+
+### Error Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| Condition evaluates to `true` | Execute step normally |
+| Condition evaluates to `false` | Skip step, continue to next |
+| Undefined variable | **Fail recipe** with clear error message |
+| Invalid syntax | **Fail recipe** with parse error |
+
+**Example error:**
+```
+Step 'critical-fix' condition error: Undefined variable in condition: {{missing}}.
+Available: severity, analysis, report
+```
+
+### Session State
+
+Skipped steps are tracked in session state:
+
+```json
+{
+  "skipped_steps": [
+    {
+      "id": "critical-fix",
+      "reason": "condition evaluated to false",
+      "condition": "{{severity}} == 'critical'"
+    }
+  ]
+}
+```
+
+### Complete Example
+
+```yaml
+name: "conditional-code-review"
+description: "Review with conditional fixes based on severity"
+version: "1.0.0"
+
+context:
+  file_path: "src/auth.py"
+
+steps:
+  - id: "analyze"
+    agent: "analyzer"
+    prompt: "Analyze {{file_path}} for issues"
+    output: "analysis"
+
+  - id: "critical-fix"
+    condition: "{{analysis.severity}} == 'critical'"
+    agent: "fixer"
+    prompt: "Fix critical issues in {{file_path}}: {{analysis.issues}}"
+    output: "fixes"
+
+  - id: "high-priority-review"
+    condition: "{{analysis.severity}} == 'high' or {{analysis.severity}} == 'critical'"
+    agent: "reviewer"
+    prompt: "Review high-priority issues: {{analysis}}"
+    output: "review"
+
+  - id: "report"
+    agent: "reporter"
+    prompt: |
+      Generate report:
+      Analysis: {{analysis}}
+      Fixes: {{fixes}}
+      Review: {{review}}
+```
+
+### Deferred Features
+
+These operators are not yet implemented but may be added based on need:
+
+- Numeric comparisons: `>`, `<`, `>=`, `<=`
+- Negation: `not`
+- String functions: `.contains()`, `.startswith()`, `.endswith()`
+- Parentheses for grouping
+
+---
+
 ## Validation Rules
 
 The tool-recipes module validates recipes before execution:
@@ -532,6 +736,7 @@ The tool-recipes module validates recipes before execution:
 - [ ] `id` present and unique
 - [ ] `agent` present and available
 - [ ] `prompt` present and non-empty
+- [ ] `condition` contains at least one variable if present
 - [ ] `timeout` positive integer if present
 - [ ] `retry.max_attempts` positive if present
 - [ ] `on_error` valid value if present
@@ -649,15 +854,6 @@ These fields are documented for forward compatibility but not yet implemented:
     - id: "performance"
       agent: "performance-optimizer"
       prompt: "Performance scan"
-```
-
-### Conditional Execution
-
-```yaml
-- id: "conditional-fix"
-  condition: "{{security_findings.severity}} == 'critical'"
-  agent: "auto-fixer"
-  prompt: "Auto-fix critical issues"
 ```
 
 ### Looping

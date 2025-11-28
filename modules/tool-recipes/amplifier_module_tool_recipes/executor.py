@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .expression_evaluator import ExpressionError
+from .expression_evaluator import evaluate_condition
 from .models import Recipe
 from .models import Step
 from .session import SessionManager
@@ -87,6 +89,20 @@ class RecipeExecutor:
 
                 # Add step metadata to context
                 context["step"] = {"id": step.id, "index": i}
+
+                # Check condition if present
+                if step.condition:
+                    try:
+                        condition_result = evaluate_condition(step.condition, context)
+                    except ExpressionError as e:
+                        raise ValueError(f"Step '{step.id}': condition error: {e}") from e
+
+                    if not condition_result:
+                        # Skip this step - record in state but don't execute
+                        skipped_steps = context.get("_skipped_steps", [])
+                        skipped_steps.append(step.id)
+                        context["_skipped_steps"] = skipped_steps
+                        continue
 
                 # Execute step with retry
                 try:

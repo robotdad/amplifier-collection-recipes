@@ -17,6 +17,7 @@ class Step:
     prompt: str
     mode: str | None = None
     output: str | None = None
+    condition: str | None = None
     timeout: int = 600
     retry: dict[str, Any] | None = None
     on_error: str = "fail"

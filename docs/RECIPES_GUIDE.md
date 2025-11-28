@@ -347,27 +347,45 @@ steps:
 
 ```yaml
 name: "conditional-processing"
+version: "1.0.0"
+description: "Route processing based on classification"
+
 steps:
   - id: "classify"
     agent: "classifier"
     prompt: "Classify {{input}} as: simple, medium, complex"
     output: "classification"
 
-  # Future: conditional steps
-  # - id: "simple-process"
-  #   condition: "{{classification}} == 'simple'"
-  #   agent: "simple-processor"
+  - id: "simple-process"
+    condition: "{{classification}} == 'simple'"
+    agent: "simple-processor"
+    prompt: "Process simple case: {{input}}"
+    output: "result"
 
-  # - id: "complex-process"
-  #   condition: "{{classification}} == 'complex'"
-  #   agent: "complex-processor"
+  - id: "medium-process"
+    condition: "{{classification}} == 'medium'"
+    agent: "medium-processor"
+    prompt: "Process medium complexity case: {{input}}"
+    output: "result"
+
+  - id: "complex-process"
+    condition: "{{classification}} == 'complex'"
+    agent: "complex-processor"
+    prompt: "Process complex case: {{input}}"
+    output: "result"
 ```
 
-**Current limitation:** No native conditionals yet.
+**When to use:**
+- Routing based on prior analysis
+- Severity-based processing
+- Optional steps that depend on prior results
 
-**Workaround:** External script parses `classification` output, runs appropriate follow-up recipe.
+**Behavior:**
+- Condition is `true` → Step executes
+- Condition is `false` → Step skips, continues to next
+- Undefined variable → Recipe fails with clear error
 
-**Future enhancement:** `condition` field on steps.
+**See also:** [Condition Expressions](RECIPE_SCHEMA.md#condition-expressions) for complete syntax reference.
 
 ### Pattern 5: Error-Tolerant Pipeline
 
