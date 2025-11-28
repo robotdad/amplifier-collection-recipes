@@ -8,7 +8,7 @@ This document defines the complete schema for recipe YAML files. Every field, co
 
 Recipes are declarative YAML specifications that define multi-step agent workflows. The tool-recipes module parses and executes these specifications.
 
-**Schema Version:** 1.0.0
+**Schema Version:** 1.2.0
 
 ## Top-Level Structure
 
@@ -601,9 +601,8 @@ retry:
 - Each step depends on all previous steps
 
 **Use `depends_on` when:**
-- Future parallel execution (not yet implemented)
 - Explicit dependency documentation
-- Conditional step execution (future)
+- Complex step ordering requirements
 
 **Example:**
 ```yaml
@@ -902,6 +901,38 @@ steps:
 
 **Rationale:** Fail fast and visibly during development. Silent partial failures hide bugs. If partial completion is needed later, that can be added.
 
+### Parallel Iteration
+
+Add `parallel: true` to run all iterations concurrently:
+
+```yaml
+- id: "multi-perspective-analysis"
+  foreach: "{{perspectives}}"
+  as: "perspective"
+  collect: "analyses"
+  parallel: true  # Run all iterations simultaneously
+  agent: "zen-architect"
+  prompt: "Analyze from {{perspective}} perspective"
+```
+
+**Behavior with `parallel: true`:**
+- All iterations start at the same time
+- Results collected in input order (regardless of completion order)
+- If ANY iteration fails, entire step fails (fail-fast)
+- Significantly faster for independent analyses (~Nx speedup for N items)
+
+**When to use parallel:**
+- Independent analyses (security, performance, quality scans)
+- Perspectives that don't depend on each other
+- When order of execution doesn't matter
+
+**When NOT to use parallel:**
+- Iterations that depend on previous results
+- Rate-limited APIs (may hit limits)
+- Very large lists (spawns all at once)
+
+**Default:** `parallel: false` (sequential iteration, as documented above)
+
 ### Interaction with Conditions
 
 ```yaml
@@ -969,7 +1000,6 @@ These features may be added based on real usage needs:
 
 - `continue_on_error` - partial completion on failures
 - Checkpointing/resumability for long loops
-- Parallel iteration (`parallel: true`)
 - Nested loops (`nested_foreach`)
 - Index variable (`index_as`)
 - Early termination (`break_if`)
@@ -1094,28 +1124,11 @@ steps:
 
 ---
 
-## Future Enhancements
-
-These fields are documented for forward compatibility but not yet implemented:
-
-### Parallel Execution
-
-```yaml
-- id: "parallel-analysis"
-  parallel: true
-  substeps:
-    - id: "security"
-      agent: "security-guardian"
-      prompt: "Security scan"
-
-    - id: "performance"
-      agent: "performance-optimizer"
-      prompt: "Performance scan"
-```
-
----
-
 ## Schema Change History
+
+### v1.2.0
+- Parallel iteration (`parallel: true` on foreach steps)
+- All iterations run concurrently with fail-fast behavior
 
 ### v1.1.0
 - Looping and iteration (`foreach`, `as`, `collect`, `max_iterations`)

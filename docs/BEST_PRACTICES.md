@@ -526,23 +526,6 @@ steps:
   # Uses small summary instead of large document
 ```
 
-### Future: Parallel Execution
-
-**Design for eventual parallelization:**
-
-```yaml
-# These steps are independent - can run in parallel (future)
-- id: "security-check"
-  agent: "security-guardian"
-
-- id: "performance-check"
-  agent: "performance-optimizer"
-
-# This step depends on both - must run after
-- id: "synthesize"
-  depends_on: ["security-check", "performance-check"]
-```
-
 ---
 
 ## Testing

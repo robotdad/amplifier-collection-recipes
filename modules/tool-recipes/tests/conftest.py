@@ -1,7 +1,10 @@
 """Pytest fixtures for tool-recipes tests."""
 
+import sys
 import tempfile
+import types
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -9,6 +12,40 @@ import pytest
 from amplifier_module_tool_recipes.models import Recipe
 from amplifier_module_tool_recipes.models import Step
 from amplifier_module_tool_recipes.session import SessionManager
+
+# Module mocking is handled per-test-module via autouse fixture
+# to avoid polluting sys.modules for other test directories
+
+_mock_modules = ["amplifier_app_cli", "amplifier_app_cli.session_spawner"]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def mock_amplifier_app_cli():
+    """Mock amplifier_app_cli modules for tests in this directory.
+
+    Uses module scope to install mocks once per test module,
+    and restores original modules after all tests in the module complete.
+    This prevents pollution of sys.modules for tests in other directories.
+    """
+    # Save any existing module entries
+    original_modules: dict[str, types.ModuleType] = {}
+    for mod in _mock_modules:
+        if mod in sys.modules:
+            original_modules[mod] = sys.modules[mod]
+
+    # Install mocks
+    mock_session_spawner = MagicMock()
+    sys.modules["amplifier_app_cli"] = MagicMock()
+    sys.modules["amplifier_app_cli.session_spawner"] = mock_session_spawner
+
+    yield
+
+    # Restore original modules after tests complete
+    for mod in _mock_modules:
+        if mod in original_modules:
+            sys.modules[mod] = original_modules[mod]
+        elif mod in sys.modules:
+            del sys.modules[mod]
 
 
 @pytest.fixture

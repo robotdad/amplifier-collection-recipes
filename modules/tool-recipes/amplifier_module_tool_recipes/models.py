@@ -21,6 +21,7 @@ class Step:
     foreach: str | None = None
     as_var: str | None = None  # Maps to 'as' in YAML (as is Python reserved)
     collect: str | None = None
+    parallel: bool = False  # Run all foreach iterations concurrently
     max_iterations: int = 100
     timeout: int = 600
     retry: dict[str, Any] | None = None
@@ -74,6 +75,10 @@ class Step:
                 errors.append(f"Step '{self.id}': 'collect' must be a valid variable name")
             if self.max_iterations <= 0:
                 errors.append(f"Step '{self.id}': max_iterations must be positive")
+
+        # Parallel validation
+        if self.parallel and not self.foreach:
+            errors.append(f"Step '{self.id}': parallel requires foreach")
 
         return errors
 

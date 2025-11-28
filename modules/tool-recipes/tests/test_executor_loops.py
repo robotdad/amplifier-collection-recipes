@@ -1,6 +1,5 @@
 """Tests for executor loop (foreach) functionality."""
 
-import sys
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -10,10 +9,7 @@ from amplifier_module_tool_recipes.executor import RecipeExecutor
 from amplifier_module_tool_recipes.models import Recipe
 from amplifier_module_tool_recipes.models import Step
 
-# Create mock module to avoid dependency on amplifier_app_cli
-mock_session_spawner = MagicMock()
-sys.modules["amplifier_app_cli"] = MagicMock()
-sys.modules["amplifier_app_cli.session_spawner"] = mock_session_spawner
+# Note: amplifier_app_cli mocking handled in conftest.py to ensure proper cleanup
 
 
 @pytest.fixture
@@ -425,3 +421,251 @@ class TestLoopValidation:
         )
         errors = step.validate()
         assert not errors
+
+    def test_parallel_requires_foreach(self):
+        """parallel=True without foreach should fail validation."""
+        step = Step(
+            id="test",
+            agent="a",
+            prompt="p",
+            parallel=True,  # parallel without foreach
+        )
+        errors = step.validate()
+        assert any("parallel requires foreach" in e for e in errors)
+
+    def test_parallel_with_foreach_valid(self):
+        """parallel=True with foreach should pass validation."""
+        step = Step(
+            id="test",
+            agent="a",
+            prompt="p",
+            foreach="{{items}}",
+            parallel=True,
+            collect="results",
+        )
+        errors = step.validate()
+        assert not errors
+
+
+class TestParallelExecution:
+    """Tests for parallel foreach execution."""
+
+    @pytest.mark.asyncio
+    @patch("amplifier_app_cli.session_spawner.spawn_sub_session")
+    async def test_parallel_foreach_executes_all_items(
+        self, mock_spawn, mock_coordinator, mock_session_manager, temp_dir
+    ):
+        """parallel=True executes all iterations concurrently."""
+        mock_spawn.side_effect = AsyncMock(side_effect=["result_a", "result_b", "result_c"])
+
+        executor = RecipeExecutor(mock_coordinator, mock_session_manager)
+
+        recipe = Recipe(
+            name="test",
+            description="test",
+            version="1.0.0",
+            steps=[
+                Step(
+                    id="parallel-loop",
+                    agent="analyzer",
+                    prompt="Analyze {{item}}",
+                    foreach="{{items}}",
+                    parallel=True,
+                    collect="results",
+                ),
+            ],
+            context={"items": ["a", "b", "c"]},
+        )
+
+        result = await executor.execute_recipe(recipe, {}, temp_dir)
+
+        # Should have called spawn_sub_session 3 times
+        assert mock_spawn.call_count == 3
+        # Results should be in order
+        assert result["results"] == ["result_a", "result_b", "result_c"]
+
+    @pytest.mark.asyncio
+    @patch("amplifier_app_cli.session_spawner.spawn_sub_session")
+    async def test_parallel_foreach_preserves_order(self, mock_spawn, mock_coordinator, mock_session_manager, temp_dir):
+        """Parallel execution preserves result order matching input order."""
+        # Simulate varying response times by using simple returns
+        mock_spawn.side_effect = AsyncMock(side_effect=["first", "second", "third"])
+
+        executor = RecipeExecutor(mock_coordinator, mock_session_manager)
+
+        recipe = Recipe(
+            name="test",
+            description="test",
+            version="1.0.0",
+            steps=[
+                Step(
+                    id="parallel-loop",
+                    agent="a",
+                    prompt="Process {{item}}",
+                    foreach="{{items}}",
+                    parallel=True,
+                    collect="ordered_results",
+                ),
+            ],
+            context={"items": ["x", "y", "z"]},
+        )
+
+        result = await executor.execute_recipe(recipe, {}, temp_dir)
+
+        # Results should maintain order
+        assert result["ordered_results"] == ["first", "second", "third"]
+
+    @pytest.mark.asyncio
+    @patch("amplifier_app_cli.session_spawner.spawn_sub_session")
+    async def test_parallel_foreach_fail_fast(self, mock_spawn, mock_coordinator, mock_session_manager, temp_dir):
+        """Any parallel iteration failure fails the entire step."""
+        # Second iteration fails
+        mock_spawn.side_effect = [
+            AsyncMock(return_value="ok")(),
+            Exception("Parallel error"),
+            AsyncMock(return_value="ok")(),
+        ]
+
+        executor = RecipeExecutor(mock_coordinator, mock_session_manager)
+
+        recipe = Recipe(
+            name="test",
+            description="test",
+            version="1.0.0",
+            steps=[
+                Step(
+                    id="parallel-loop",
+                    agent="a",
+                    prompt="Process {{item}}",
+                    foreach="{{items}}",
+                    parallel=True,
+                    collect="results",
+                ),
+            ],
+            context={"items": ["a", "b", "c"]},
+        )
+
+        with pytest.raises(ValueError, match="iteration 1 failed"):
+            await executor.execute_recipe(recipe, {}, temp_dir)
+
+    @pytest.mark.asyncio
+    @patch("amplifier_app_cli.session_spawner.spawn_sub_session")
+    async def test_parallel_foreach_empty_list_skips(
+        self, mock_spawn, mock_coordinator, mock_session_manager, temp_dir
+    ):
+        """Empty list skips parallel step without error."""
+        executor = RecipeExecutor(mock_coordinator, mock_session_manager)
+
+        recipe = Recipe(
+            name="test",
+            description="test",
+            version="1.0.0",
+            steps=[
+                Step(
+                    id="parallel-loop",
+                    agent="a",
+                    prompt="Process {{item}}",
+                    foreach="{{items}}",
+                    parallel=True,
+                    collect="results",
+                ),
+            ],
+            context={"items": []},  # Empty list
+        )
+
+        result = await executor.execute_recipe(recipe, {}, temp_dir)
+
+        # No calls for empty list
+        assert mock_spawn.call_count == 0
+        assert "parallel-loop" in result.get("_skipped_steps", [])
+
+    @pytest.mark.asyncio
+    @patch("amplifier_app_cli.session_spawner.spawn_sub_session")
+    async def test_parallel_foreach_with_custom_as_var(
+        self, mock_spawn, mock_coordinator, mock_session_manager, temp_dir
+    ):
+        """Parallel execution respects custom 'as' variable name."""
+        mock_spawn.side_effect = AsyncMock(side_effect=["r1", "r2"])
+
+        executor = RecipeExecutor(mock_coordinator, mock_session_manager)
+
+        recipe = Recipe(
+            name="test",
+            description="test",
+            version="1.0.0",
+            steps=[
+                Step(
+                    id="parallel-loop",
+                    agent="a",
+                    prompt="Analyze {{perspective}}",
+                    foreach="{{perspectives}}",
+                    as_var="perspective",
+                    parallel=True,
+                    collect="analyses",
+                ),
+            ],
+            context={"perspectives": ["security", "performance"]},
+        )
+
+        result = await executor.execute_recipe(recipe, {}, temp_dir)
+
+        assert result["analyses"] == ["r1", "r2"]
+
+    @pytest.mark.asyncio
+    @patch("amplifier_app_cli.session_spawner.spawn_sub_session")
+    async def test_parallel_vs_sequential_same_results(
+        self, mock_spawn, mock_coordinator, mock_session_manager, temp_dir
+    ):
+        """Parallel and sequential execution produce identical result structure."""
+        # Test sequential first
+        mock_spawn.side_effect = AsyncMock(side_effect=["s1", "s2", "s3"])
+        executor = RecipeExecutor(mock_coordinator, mock_session_manager)
+
+        sequential_recipe = Recipe(
+            name="seq-test",
+            description="test",
+            version="1.0.0",
+            steps=[
+                Step(
+                    id="loop",
+                    agent="a",
+                    prompt="Process {{item}}",
+                    foreach="{{items}}",
+                    parallel=False,  # Sequential
+                    collect="results",
+                ),
+            ],
+            context={"items": ["a", "b", "c"]},
+        )
+
+        seq_result = await executor.execute_recipe(sequential_recipe, {}, temp_dir)
+        seq_call_count = mock_spawn.call_count
+
+        # Reset and test parallel
+        mock_spawn.reset_mock()
+        mock_spawn.side_effect = AsyncMock(side_effect=["s1", "s2", "s3"])
+
+        parallel_recipe = Recipe(
+            name="par-test",
+            description="test",
+            version="1.0.0",
+            steps=[
+                Step(
+                    id="loop",
+                    agent="a",
+                    prompt="Process {{item}}",
+                    foreach="{{items}}",
+                    parallel=True,  # Parallel
+                    collect="results",
+                ),
+            ],
+            context={"items": ["a", "b", "c"]},
+        )
+
+        par_result = await executor.execute_recipe(parallel_recipe, {}, temp_dir)
+        par_call_count = mock_spawn.call_count
+
+        # Same number of calls
+        assert seq_call_count == par_call_count == 3
+        # Same results structure
+        assert seq_result["results"] == par_result["results"]

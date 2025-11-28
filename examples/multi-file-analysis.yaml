@@ -1,21 +1,22 @@
 name: "multi-file-analysis"
-description: "Analyze multiple files with per-file insights and consolidated summary"
-version: "1.0.0"
+description: "Analyze multiple files in parallel with per-file insights and consolidated summary"
+version: "1.1.0"
 author: "Amplifier Recipes Collection"
-tags: ["analysis", "bulk-processing", "looping", "python"]
+tags: ["analysis", "bulk-processing", "looping", "parallel", "python"]
 
-# This recipe demonstrates the foreach looping pattern:
-# 1. Iterate over a list of files (foreach)
-# 2. Analyze EACH file individually
+# This recipe demonstrates the foreach looping pattern with parallel execution:
+# 1. Iterate over a list of files (foreach with parallel: true)
+# 2. Analyze ALL files concurrently (not sequentially!)
 # 3. Collect all analyses into a list
 # 4. Synthesize findings into actionable summary
 #
-# The foreach pattern is ideal when:
+# The parallel foreach pattern is ideal when:
 # - Each item needs individual attention
+# - Items are INDEPENDENT (no dependencies between iterations)
 # - Results should be collected for later synthesis
-# - Processing can fail-fast on errors
+# - Processing can continue on individual failures (on_error: continue)
 #
-# Typical runtime: 2-5 minutes (depends on file count)
+# Typical runtime: 30-60 seconds (parallel) vs 2-5 minutes (sequential)
 # Required agents: zen-architect
 #
 # Usage (with file list):
@@ -31,12 +32,13 @@ context:
   focus: "code quality and maintainability"
 
 steps:
-  # Step 1: Analyze each file individually
-  # Uses foreach to iterate over the files list
+  # Step 1: Analyze each file in parallel
+  # Uses foreach with parallel: true to analyze ALL files concurrently
   # Each iteration's result is collected into "file_analyses"
   - id: "analyze-each-file"
     foreach: "{{files}}"
     as: "current_file"
+    parallel: true  # Analyze all files concurrently!
     collect: "file_analyses"
     max_iterations: 20
     agent: "developer-expertise:zen-architect"
@@ -96,18 +98,23 @@ steps:
     output: "summary_report"
     timeout: 300
 
-# Example execution flow:
+# Example execution flow (PARALLEL):
 #
 # Given: files = ["auth.py", "models.py", "utils.py"]
 #
-# 1. analyze-each-file iterates over files:
-#    - Iteration 0: Analyze auth.py → result stored
-#    - Iteration 1: Analyze models.py → result stored
-#    - Iteration 2: Analyze utils.py → result stored
+# 1. analyze-each-file runs ALL iterations concurrently:
+#    - auth.py analysis    ─┬─→ all run at the same time
+#    - models.py analysis  ─┤   (not sequentially!)
+#    - utils.py analysis   ─┘
+#    - Results collected in original order when all complete
 #    - file_analyses = [auth_analysis, models_analysis, utils_analysis]
 #
 # 2. create-summary receives all analyses and creates consolidated report
 #
 # Output variables:
-#   file_analyses: [analysis1, analysis2, analysis3]
+#   file_analyses: [analysis1, analysis2, analysis3]  # Preserves input order
 #   summary_report: Consolidated executive summary
+#
+# Performance comparison (3 files, ~30s each):
+#   Sequential: 30s + 30s + 30s = ~90 seconds
+#   Parallel:   max(30s, 30s, 30s) = ~30 seconds  (3x faster!)

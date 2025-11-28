@@ -520,20 +520,24 @@ Error: Session state corrupted or incomplete
 
 1. **Too many sequential steps:**
    ```yaml
-   # Current (sequential)
+   # Sequential (slower)
    steps:
      - id: "step1"  # Waits for completion
      - id: "step2"  # Waits for completion
      - id: "step3"  # Waits for completion
 
-   # Future: Mark independent steps for parallel execution
+   # Use parallel foreach for independent analyses
+   context:
+     perspectives: ["security", "performance", "quality"]
+
    steps:
-     - id: "step1"
-       parallel: true  # Can run concurrently
-     - id: "step2"
-       parallel: true  # Can run concurrently
-     - id: "step3"
-       depends_on: ["step1", "step2"]  # Waits for both
+     - id: "multi-analysis"
+       foreach: "{{perspectives}}"
+       as: "perspective"
+       parallel: true  # All run concurrently
+       collect: "analyses"
+       agent: "analyzer"
+       prompt: "Analyze from {{perspective}} perspective"
    ```
 
 2. **Large context passed between steps:**

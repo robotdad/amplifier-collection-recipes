@@ -1,6 +1,5 @@
 """Tests for executor condition evaluation integration."""
 
-import sys
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -10,10 +9,7 @@ from amplifier_module_tool_recipes.executor import RecipeExecutor
 from amplifier_module_tool_recipes.models import Recipe
 from amplifier_module_tool_recipes.models import Step
 
-# Create mock module to avoid dependency on amplifier_app_cli
-mock_session_spawner = MagicMock()
-sys.modules["amplifier_app_cli"] = MagicMock()
-sys.modules["amplifier_app_cli.session_spawner"] = mock_session_spawner
+# Note: amplifier_app_cli mocking handled in conftest.py to ensure proper cleanup
 
 
 @pytest.fixture

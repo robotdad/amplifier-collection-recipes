@@ -219,17 +219,22 @@ steps:
     prompt: "Brainstorm alternative architectures"
 ```
 
-### Parallel Execution (Future)
+### Parallel foreach
+
+Run iterations concurrently for faster multi-perspective analysis:
 
 ```yaml
+context:
+  perspectives: ["security", "performance", "maintainability"]
+
 steps:
-  - id: "analyze-parallel"
-    parallel: true
-    substeps:
-      - id: "security-check"
-        agent: "security-guardian"
-      - id: "performance-check"
-        agent: "performance-optimizer"
+  - id: "multi-analysis"
+    foreach: "{{perspectives}}"
+    as: "perspective"
+    parallel: true  # All perspectives analyzed simultaneously
+    collect: "analyses"
+    agent: "zen-architect"
+    prompt: "Analyze code from {{perspective}} perspective"
 ```
 
 ## Tool Configuration

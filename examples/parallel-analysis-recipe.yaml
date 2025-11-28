@@ -1,0 +1,64 @@
+name: "parallel-multi-perspective-analysis"
+description: "Analyze code from multiple perspectives simultaneously using parallel foreach"
+version: "1.2.0"
+author: "Amplifier Recipes Collection"
+tags: ["parallel", "analysis", "multi-perspective"]
+
+# Demonstrates parallel foreach execution
+# All perspectives are analyzed concurrently, then synthesized
+# Required agents: zen-architect
+
+context:
+  file_path: ""  # Required: path to code file
+  perspectives:
+    - "security"
+    - "performance"
+    - "maintainability"
+    - "testability"
+
+steps:
+  # Step 1: Analyze from all perspectives in parallel
+  # Each perspective runs concurrently, reducing total time
+  - id: "multi-perspective-analysis"
+    agent: "developer-expertise:zen-architect"
+    mode: "ANALYZE"
+    prompt: |
+      Analyze {{file_path}} from a {{perspective}} perspective.
+
+      Focus specifically on {{perspective}} concerns:
+
+      For security: vulnerabilities, input validation, auth issues
+      For performance: bottlenecks, complexity, resource usage
+      For maintainability: code clarity, coupling, documentation
+      For testability: test coverage gaps, mocking challenges, edge cases
+
+      Provide:
+      1. Current state assessment (1-10 score)
+      2. Key findings (3-5 items)
+      3. Improvement recommendations
+
+      Be concise but thorough.
+    foreach: "{{perspectives}}"
+    as: "perspective"
+    parallel: true  # Run all perspectives simultaneously
+    collect: "analyses"
+    timeout: 300
+
+  # Step 2: Synthesize all parallel analysis results
+  - id: "synthesize-perspectives"
+    agent: "developer-expertise:zen-architect"
+    mode: "ARCHITECT"
+    prompt: |
+      Synthesize the multi-perspective analysis results:
+
+      {{analyses}}
+
+      Create a unified assessment that:
+      1. Identifies cross-cutting concerns (issues affecting multiple perspectives)
+      2. Prioritizes improvements by impact vs effort
+      3. Highlights trade-offs between perspectives
+      4. Recommends an action plan
+
+      Present as actionable recommendations with clear priority order.
+    output: "unified_assessment"
+    timeout: 300

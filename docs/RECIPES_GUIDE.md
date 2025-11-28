@@ -309,7 +309,7 @@ steps:
 - Different specialized agents
 - Converge at end for holistic view
 
-**Future enhancement:** Mark first 3 steps with `parallel: true` for concurrent execution.
+**Tip:** For same-agent multi-perspective analysis, consider using foreach with `parallel: true` (see Pattern 3).
 
 ### Pattern 3: Bulk Processing with foreach
 
@@ -359,6 +359,7 @@ amplifier run "execute multi-file-analysis.yaml with files=['api.py','db.py']"
 - `foreach` specifies the list variable to iterate over
 - `as` sets the loop variable name (default: "item")
 - `collect` aggregates all iteration results into a list
+- `parallel: true` runs all iterations concurrently (faster for independent analyses)
 - Empty list skips the step (no error)
 - Any iteration failure stops the recipe (fail-fast)
 

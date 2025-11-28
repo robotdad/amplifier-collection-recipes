@@ -264,6 +264,7 @@ class RecipeExecutor:
         - No checkpointing (restart on failure)
         - No partial completion (fail-fast)
         - Minimal state tracking
+        - Optional parallel execution (all iterations concurrently)
 
         Args:
             step: Step with foreach field
@@ -292,6 +293,24 @@ class RecipeExecutor:
 
         # Get loop variable name
         loop_var = step.as_var or "item"
+
+        if step.parallel:
+            # Parallel execution: run all iterations concurrently
+            results = await self._execute_loop_parallel(step, context, items, loop_var)
+        else:
+            # Sequential execution: run iterations one at a time
+            results = await self._execute_loop_sequential(step, context, items, loop_var)
+
+        # Store results
+        if step.collect:
+            context[step.collect] = results
+        elif step.output and results:
+            context[step.output] = results[-1]  # Last iteration result
+
+    async def _execute_loop_sequential(
+        self, step: Step, context: dict[str, Any], items: list[Any], loop_var: str
+    ) -> list[Any]:
+        """Execute loop iterations sequentially."""
         results = []
 
         for idx, item in enumerate(items):
@@ -312,11 +331,39 @@ class RecipeExecutor:
                 if loop_var in context:
                     del context[loop_var]
 
-        # Store results
-        if step.collect:
-            context[step.collect] = results
-        elif step.output and results:
-            context[step.output] = results[-1]  # Last iteration result
+        return results
+
+    async def _execute_loop_parallel(
+        self, step: Step, context: dict[str, Any], items: list[Any], loop_var: str
+    ) -> list[Any]:
+        """
+        Execute loop iterations in parallel using asyncio.gather.
+
+        Each iteration gets its own context copy to avoid conflicts.
+        Results are returned in the same order as input items.
+        Fail-fast: if any iteration fails, the entire step fails.
+        """
+
+        async def execute_iteration(idx: int, item: Any) -> Any:
+            """Execute a single iteration with isolated context."""
+            # Copy context and set loop variable for this iteration
+            iter_context = {**context, loop_var: item}
+
+            try:
+                return await self.execute_step_with_retry(step, iter_context)
+            except SkipRemainingError:
+                raise
+            except Exception as e:
+                raise ValueError(f"Step '{step.id}' iteration {idx} failed: {e}") from e
+
+        # Create tasks for all iterations
+        tasks = [execute_iteration(idx, item) for idx, item in enumerate(items)]
+
+        # Run all tasks concurrently, fail-fast on any error
+        # asyncio.gather preserves order of results
+        results = await asyncio.gather(*tasks)
+
+        return list(results)
 
     def _resolve_foreach_variable(self, foreach: str, context: dict[str, Any]) -> Any:
         """
