@@ -311,35 +311,59 @@ steps:
 
 **Future enhancement:** Mark first 3 steps with `parallel: true` for concurrent execution.
 
-### Pattern 3: Validation Loop
+### Pattern 3: Bulk Processing with foreach
 
-**Use case:** Generate, validate, improve until acceptable.
+**Use case:** Process multiple items with the same analysis pattern.
 
 ```yaml
-name: "validation-loop"
+name: "multi-file-analysis"
 context:
-  max_iterations: 3
+  # Files provided as list - override at invocation time
+  files:
+    - "src/auth.py"
+    - "src/models.py"
+    - "src/utils.py"
+  focus: "code quality"
 
 steps:
-  - id: "generate"
-    agent: "generator"
-    prompt: "Generate solution for: {{problem}}"
-    output: "solution"
+  - id: "analyze-each"
+    foreach: "{{files}}"
+    as: "current_file"
+    agent: "zen-architect"
+    prompt: "Analyze {{current_file}} for {{focus}} issues"
+    collect: "file_analyses"
 
-  - id: "validate"
-    agent: "validator"
-    prompt: "Validate: {{solution}}"
-    output: "validation"
-
-  # Manual: check validation.passed
-  # If failed, re-run recipe with solution as context
+  - id: "synthesize"
+    agent: "zen-architect"
+    prompt: |
+      Create summary report from analyses:
+      {{file_analyses}}
+    output: "final_report"
 ```
 
-**Current limitation:** No automatic looping yet.
+**Usage:**
+```bash
+# Use defaults
+amplifier run "execute multi-file-analysis.yaml"
 
-**Workaround:** External script checks `validation` output, re-runs recipe with updated context.
+# Override files at runtime
+amplifier run "execute multi-file-analysis.yaml with files=['api.py','db.py']"
+```
 
-**Future enhancement:** Native loop support with `while` or `until` conditions.
+**When to use:**
+- Processing multiple items with the same pattern
+- Collecting results for later synthesis
+- Batch operations where item list is known
+
+**Behavior:**
+- `foreach` specifies the list variable to iterate over
+- `as` sets the loop variable name (default: "item")
+- `collect` aggregates all iteration results into a list
+- Empty list skips the step (no error)
+- Any iteration failure stops the recipe (fail-fast)
+
+**See also:** [Looping and Iteration](RECIPE_SCHEMA.md#looping-and-iteration) for complete syntax reference.
+**Working example:** [multi-file-analysis.yaml](../examples/multi-file-analysis.yaml)
 
 ### Pattern 4: Conditional Processing
 

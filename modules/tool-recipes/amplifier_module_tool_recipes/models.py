@@ -18,6 +18,10 @@ class Step:
     mode: str | None = None
     output: str | None = None
     condition: str | None = None
+    foreach: str | None = None
+    as_var: str | None = None  # Maps to 'as' in YAML (as is Python reserved)
+    collect: str | None = None
+    max_iterations: int = 100
     timeout: int = 600
     retry: dict[str, Any] | None = None
     on_error: str = "fail"
@@ -60,6 +64,17 @@ class Step:
             if backoff not in ("exponential", "linear"):
                 errors.append(f"Step '{self.id}': retry.backoff must be 'exponential' or 'linear'")
 
+        # Loop validation
+        if self.foreach:
+            if "{{" not in self.foreach:
+                errors.append(f"Step '{self.id}': foreach must contain a variable reference (e.g., '{{{{items}}}}')")
+            if self.as_var and not self.as_var.replace("_", "").isalnum():
+                errors.append(f"Step '{self.id}': 'as' must be a valid variable name")
+            if self.collect and not self.collect.replace("_", "").isalnum():
+                errors.append(f"Step '{self.id}': 'collect' must be a valid variable name")
+            if self.max_iterations <= 0:
+                errors.append(f"Step '{self.id}': max_iterations must be positive")
+
         return errors
 
 
@@ -98,7 +113,11 @@ class Recipe:
         for step_data in steps_data:
             if not isinstance(step_data, dict):
                 raise ValueError("Each step must be a dictionary")
-            steps.append(Step(**step_data))
+            # Map 'as' to 'as_var' since 'as' is Python reserved keyword
+            step_data_copy = dict(step_data)
+            if "as" in step_data_copy:
+                step_data_copy["as_var"] = step_data_copy.pop("as")
+            steps.append(Step(**step_data_copy))
 
         # Create recipe
         recipe = cls(

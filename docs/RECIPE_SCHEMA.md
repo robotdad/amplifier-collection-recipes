@@ -165,6 +165,10 @@ Each step represents one agent invocation in the workflow.
   mode: string                  # Optional - Agent mode (if agent supports)
   prompt: string                # Required - Prompt template with variables
   condition: string             # Optional - Expression that must evaluate to true
+  foreach: string               # Optional - Variable containing list to iterate
+  as: string                    # Optional - Loop variable name (default: "item")
+  collect: string               # Optional - Variable to collect all iteration results
+  max_iterations: integer       # Optional - Safety limit (default: 100)
   output: string                # Optional - Variable name for step result
   agent_config: dict            # Optional - Override agent configuration
   timeout: integer              # Optional - Max execution time (seconds)
@@ -343,6 +347,124 @@ Alternative conditions:
 **Rationale:** Fail fast on errors. Silent skips would mask configuration problems.
 
 See [Condition Expressions](#condition-expressions) for complete syntax reference.
+
+#### `foreach` (optional)
+
+**Type:** string (variable reference)
+**Purpose:** Iterate over a list, executing the step once per item.
+
+**Syntax:**
+- Must contain a variable reference: `{{variable_name}}`
+- Referenced variable must be a list at runtime
+
+**Examples:**
+```yaml
+- id: "discover-files"
+  agent: "explorer"
+  prompt: "List all Python files in {{directory}}"
+  output: "files"  # Returns list: ["a.py", "b.py", "c.py"]
+
+- id: "analyze-each"
+  foreach: "{{files}}"
+  as: "current_file"
+  agent: "analyzer"
+  prompt: "Analyze {{current_file}} for issues"
+  collect: "file_analyses"
+```
+
+**Behavior:**
+- `foreach` variable is list → Iterate over each item
+- `foreach` variable is empty list → Skip step (no error)
+- `foreach` variable is not a list → **Fail recipe** with clear error
+- `foreach` variable undefined → **Fail recipe** with clear error
+- Exceeds `max_iterations` → **Fail recipe** with limit error
+- Any iteration fails → **Fail recipe** immediately (fail-fast)
+
+**Rationale:** Fail fast and visibly. Silent partial failures hide bugs.
+
+See [Looping and Iteration](#looping-and-iteration) for complete syntax reference.
+
+#### `as` (optional)
+
+**Type:** string (variable name)
+**Default:** `"item"`
+**Purpose:** Name of loop variable available within the iteration.
+
+**Constraints:**
+- Must be valid variable name (alphanumeric, underscores)
+- Cannot conflict with reserved names (`recipe`, `step`, `session`)
+
+**Examples:**
+```yaml
+# Using default "item"
+- foreach: "{{files}}"
+  prompt: "Process {{item}}"
+
+# Using custom name
+- foreach: "{{files}}"
+  as: "current_file"
+  prompt: "Process {{current_file}}"
+```
+
+**Scope:**
+- Loop variable only available within the loop step
+- Not available in subsequent steps (loop-scoped)
+
+#### `collect` (optional)
+
+**Type:** string (variable name)
+**Purpose:** Aggregate all iteration results into a list variable.
+
+**Constraints:**
+- Must be valid variable name (alphanumeric, underscores)
+- Cannot conflict with reserved names (`recipe`, `step`, `session`)
+
+**Examples:**
+```yaml
+- id: "analyze-each"
+  foreach: "{{files}}"
+  as: "file"
+  prompt: "Analyze {{file}}"
+  collect: "all_analyses"  # List of all iteration results
+
+- id: "summarize"
+  prompt: "Summarize these analyses: {{all_analyses}}"
+```
+
+**Behavior:**
+- Collects results in order of iteration
+- Available to subsequent steps after loop completes
+- If `collect` omitted and `output` specified, `output` contains last iteration result only
+
+#### `max_iterations` (optional)
+
+**Type:** integer
+**Default:** 100
+**Purpose:** Safety limit to prevent runaway loops.
+
+**Constraints:**
+- Must be positive integer
+
+**Examples:**
+```yaml
+# Default limit of 100
+- foreach: "{{files}}"
+  prompt: "Process {{item}}"
+
+# Higher limit for large batches
+- foreach: "{{large_dataset}}"
+  max_iterations: 500
+  prompt: "Process {{item}}"
+
+# Lower limit for safety
+- foreach: "{{untrusted_input}}"
+  max_iterations: 10
+  prompt: "Process {{item}}"
+```
+
+**Behavior:**
+- If list length exceeds `max_iterations`, recipe fails with clear error
+- Error message shows actual count vs limit
 
 #### `output` (optional)
 
@@ -719,6 +841,141 @@ These operators are not yet implemented but may be added based on need:
 
 ---
 
+## Looping and Iteration
+
+Steps with a `foreach` field iterate over a list variable, executing the step once per item.
+
+### Basic Syntax
+
+```yaml
+- id: "process-each"
+  foreach: "{{items}}"     # Variable containing list
+  as: "current_item"       # Loop variable name (default: "item")
+  agent: "processor"
+  prompt: "Process {{current_item}}"
+  collect: "all_results"   # Aggregates iteration results
+```
+
+### How It Works
+
+1. **Resolve `foreach` variable** → Must be a list
+2. **For each item** in list:
+   - Set loop variable (`as`) to current item
+   - Substitute variables in prompt
+   - Execute step (spawn agent)
+   - Add result to collect list (if `collect` specified)
+3. **After all iterations**:
+   - Remove loop variable from context (scope ends)
+   - Store collected results (if `collect` specified)
+
+### Variable Scoping
+
+```yaml
+steps:
+  - id: "process"
+    foreach: "{{files}}"
+    as: "current_file"
+    prompt: "Process {{current_file}}"  # current_file available here
+    output: "result"
+    collect: "all_results"
+
+  - id: "summary"
+    prompt: "Summarize {{all_results}}"  # all_results available
+    # current_file NOT available here (loop-scoped)
+```
+
+**Scope rules:**
+- Loop variable (`as`) only available within the loop step
+- `collect` variable available after loop completes
+- Step `output` is the LAST iteration result (if not using `collect`)
+
+### Error Handling (Fail-Fast)
+
+| Scenario | Behavior |
+|----------|----------|
+| `foreach` variable is list | Iterate over each item |
+| `foreach` variable is empty list | Skip step (no error) |
+| `foreach` variable is not list | **Fail recipe** with clear error |
+| `foreach` variable undefined | **Fail recipe** with clear error |
+| Iteration exceeds `max_iterations` | **Fail recipe** with limit error |
+| Any iteration fails | **Fail recipe** immediately |
+
+**Rationale:** Fail fast and visibly during development. Silent partial failures hide bugs. If partial completion is needed later, that can be added.
+
+### Interaction with Conditions
+
+```yaml
+- id: "process-if-needed"
+  condition: "{{should_process}} == 'true'"  # Check BEFORE loop
+  foreach: "{{files}}"
+  as: "file"
+  prompt: "Process {{file}}"
+  collect: "results"
+```
+
+**Behavior:** Condition evaluated once. If false, entire loop skipped.
+
+### Complete Example
+
+```yaml
+name: "batch-file-analyzer"
+description: "Analyze multiple files and synthesize results"
+version: "1.0.0"
+
+context:
+  directory: "src"
+
+steps:
+  - id: "discover-files"
+    agent: "explorer"
+    prompt: "List all Python files in {{directory}}"
+    output: "files"
+
+  - id: "analyze-each"
+    foreach: "{{files}}"
+    as: "current_file"
+    agent: "analyzer"
+    prompt: |
+      Analyze {{current_file}} for:
+      - Code complexity
+      - Security issues
+      - Performance concerns
+    collect: "file_analyses"
+
+  - id: "synthesize"
+    agent: "zen-architect"
+    mode: "ANALYZE"
+    prompt: |
+      Synthesize these individual file analyses into overall findings:
+
+      {{file_analyses}}
+
+      Prioritize by severity and provide actionable recommendations.
+    output: "final_report"
+```
+
+### Edge Cases
+
+1. **Empty list**: Skip step, no error (common case)
+2. **Single item list**: Works like normal step (minimal overhead)
+3. **Very large list**: Respect `max_iterations` (default 100)
+4. **Nested variable in foreach**: `{{results.files}}` should work
+5. **Loop variable shadows context**: Local scope takes precedence
+6. **Condition + foreach**: Condition checked once, not per iteration
+
+### Deferred Features
+
+These features may be added based on real usage needs:
+
+- `continue_on_error` - partial completion on failures
+- Checkpointing/resumability for long loops
+- Parallel iteration (`parallel: true`)
+- Nested loops (`nested_foreach`)
+- Index variable (`index_as`)
+- Early termination (`break_if`)
+
+---
+
 ## Validation Rules
 
 The tool-recipes module validates recipes before execution:
@@ -856,24 +1113,20 @@ These fields are documented for forward compatibility but not yet implemented:
       prompt: "Performance scan"
 ```
 
-### Looping
-
-```yaml
-- id: "process-files"
-  foreach: "{{files}}"
-  agent: "analyzer"
-  prompt: "Analyze {{item}}"
-```
-
 ---
 
 ## Schema Change History
+
+### v1.1.0
+- Looping and iteration (`foreach`, `as`, `collect`, `max_iterations`)
+- Fail-fast iteration behavior
 
 ### v1.0.0 (Initial)
 - Basic recipe structure
 - Sequential step execution
 - Context variables and template substitution
 - Session persistence
+- Conditional execution (`condition`)
 
 ---
 

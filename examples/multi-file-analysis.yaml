@@ -1,0 +1,113 @@
+name: "multi-file-analysis"
+description: "Analyze multiple files with per-file insights and consolidated summary"
+version: "1.0.0"
+author: "Amplifier Recipes Collection"
+tags: ["analysis", "bulk-processing", "looping", "python"]
+
+# This recipe demonstrates the foreach looping pattern:
+# 1. Iterate over a list of files (foreach)
+# 2. Analyze EACH file individually
+# 3. Collect all analyses into a list
+# 4. Synthesize findings into actionable summary
+#
+# The foreach pattern is ideal when:
+# - Each item needs individual attention
+# - Results should be collected for later synthesis
+# - Processing can fail-fast on errors
+#
+# Typical runtime: 2-5 minutes (depends on file count)
+# Required agents: zen-architect
+#
+# Usage (with file list):
+#   amplifier run "execute multi-file-analysis.yaml with files=['src/auth.py','src/models.py','src/utils.py']"
+#
+# Usage (with glob discovery - let the agent find files first):
+#   amplifier run "find all *.py files in src/ then execute multi-file-analysis.yaml with those files"
+
+context:
+  # Files to analyze - provide as JSON array
+  files:
+    - "README.md"
+  focus: "code quality and maintainability"
+
+steps:
+  # Step 1: Analyze each file individually
+  # Uses foreach to iterate over the files list
+  # Each iteration's result is collected into "file_analyses"
+  - id: "analyze-each-file"
+    foreach: "{{files}}"
+    as: "current_file"
+    collect: "file_analyses"
+    max_iterations: 20
+    agent: "developer-expertise:zen-architect"
+    mode: "ANALYZE"
+    prompt: |
+      Analyze {{current_file}} focusing on: {{focus}}
+
+      Provide a concise analysis covering:
+
+      1. **Purpose**: What does this file do? (1-2 sentences)
+      2. **Quality**: Rate 1-5 stars with brief justification
+      3. **Issues**: List specific problems found (or "None" if clean)
+      4. **Suggestions**: Top 1-3 improvements (prioritized)
+
+      Keep response focused and actionable. Format as:
+
+      ## {{current_file}}
+      **Purpose**: ...
+      **Quality**: ⭐⭐⭐⭐ (4/5) - ...
+      **Issues**: ...
+      **Suggestions**: ...
+    timeout: 300
+    on_error: "continue"
+
+  # Step 2: Synthesize all analyses into summary
+  # This step receives the collected array of all file analyses
+  - id: "create-summary"
+    agent: "developer-expertise:zen-architect"
+    mode: "ARCHITECT"
+    prompt: |
+      Create an executive summary from these individual file analyses:
+
+      {{file_analyses}}
+
+      Focus area: {{focus}}
+      Files analyzed: {{files}}
+
+      Synthesize into:
+
+      ## Executive Summary
+      - Files analyzed: [count]
+      - Overall quality: [assessment]
+      - Key patterns observed
+
+      ## Priority Issues
+      Consolidate the most important issues across all files.
+      Group by type (not by file) for actionable improvements.
+
+      ## Recommendations
+      Top 3-5 actionable recommendations that would have the highest impact.
+      Reference specific files where relevant.
+
+      ## Files Requiring Attention
+      List files that scored poorly or have critical issues.
+
+      Keep the summary concise but comprehensive.
+    output: "summary_report"
+    timeout: 300
+
+# Example execution flow:
+#
+# Given: files = ["auth.py", "models.py", "utils.py"]
+#
+# 1. analyze-each-file iterates over files:
+#    - Iteration 0: Analyze auth.py → result stored
+#    - Iteration 1: Analyze models.py → result stored
+#    - Iteration 2: Analyze utils.py → result stored
+#    - file_analyses = [auth_analysis, models_analysis, utils_analysis]
+#
+# 2. create-summary receives all analyses and creates consolidated report
+#
+# Output variables:
+#   file_analyses: [analysis1, analysis2, analysis3]
+#   summary_report: Consolidated executive summary

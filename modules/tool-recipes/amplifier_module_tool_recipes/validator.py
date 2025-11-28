@@ -67,6 +67,12 @@ def check_variable_references(recipe: Recipe) -> list[str]:
     available = set(recipe.context.keys()) | reserved
 
     for step in recipe.steps:
+        # For foreach loops, the loop variable is available within the step
+        step_local_vars = set()
+        if step.foreach:
+            loop_var = step.as_var or "item"
+            step_local_vars.add(loop_var)
+
         # Check prompt variables
         prompt_vars = extract_variables(step.prompt)
         for var in prompt_vars:
@@ -75,15 +81,19 @@ def check_variable_references(recipe: Recipe) -> list[str]:
                 prefix = var.split(".")[0]
                 if prefix not in reserved:
                     errors.append(f"Step '{step.id}': Variable {{{{{var}}}}} references unknown namespace '{prefix}'")
-            elif var not in available:
+            elif var not in available and var not in step_local_vars:
                 errors.append(
                     f"Step '{step.id}': Variable {{{{{var}}}}} is not defined. "
-                    f"Available variables: {', '.join(sorted(available))}"
+                    f"Available variables: {', '.join(sorted(available | step_local_vars))}"
                 )
 
         # Add this step's output to available variables for next steps
         if step.output:
             available.add(step.output)
+
+        # Add collect variable to available variables for next steps (foreach)
+        if step.collect:
+            available.add(step.collect)
 
     return errors
 
