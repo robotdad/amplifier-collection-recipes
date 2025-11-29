@@ -1,0 +1,246 @@
+name: "dependency-upgrade-staged"
+description: "Systematic dependency upgrade with approval gates between phases"
+version: "2.0.0"
+author: "Amplifier Recipes Collection"
+tags: ["dependencies", "devops", "maintenance", "python", "staged", "approval-gates"]
+
+# This recipe demonstrates STAGED execution with APPROVAL GATES.
+#
+# Stages provide human-in-loop checkpoints for high-stakes operations:
+# 1. Assessment: Audit and plan (no approval - just gathering info)
+# 2. Validation: Check compatibility (approval before proceeding)
+# 3. Phase 1: Critical security fixes (approval required)
+# 4. Phase 2: Minor version updates (approval required)
+# 5. Phase 3: Major version updates (approval required - highest risk)
+#
+# Compare with dependency-upgrade-recipe.yaml for the flat (non-staged) version.
+#
+# Typical runtime: 15-25 minutes (includes approval wait times)
+# Required agents: zen-architect, integration-specialist
+#
+# Usage:
+#   amplifier run "execute dependency-upgrade-staged-recipe.yaml with project_path=. package_manager=uv"
+#
+# Approval workflow:
+#   - Recipe pauses at each approval gate
+#   - Use `recipe_approvals` to see pending approvals
+#   - Use `recipe_approve <session_id>` or `recipe_deny <session_id>` to continue
+
+context:
+  project_path: ""        # Required: path to project directory
+  package_manager: "uv"   # Optional: pip, uv, npm, etc. (default: uv)
+
+stages:
+  # Stage 1: Assessment - gather information (no approval needed)
+  - name: "assessment"
+    steps:
+      - id: "audit-dependencies"
+        agent: "developer-expertise:integration-specialist"
+        prompt: |
+          Audit Python dependencies in {{project_path}}:
+
+          Package manager: {{package_manager}}
+
+          Tasks:
+          1. List current dependencies (pyproject.toml, requirements.txt)
+          2. Check for available updates
+          3. Identify security vulnerabilities (if any)
+          4. Note deprecated packages
+
+          Output format:
+          For each dependency:
+          - Current version
+          - Latest version
+          - Security issues (if any)
+          - Breaking changes indicator
+          - Update priority (critical/high/medium/low)
+        output: "dependency_audit"
+        timeout: 600
+
+      - id: "plan-upgrade-strategy"
+        agent: "developer-expertise:zen-architect"
+        mode: "ARCHITECT"
+        prompt: |
+          Based on this dependency audit: {{dependency_audit}}
+
+          For project: {{project_path}}
+          Using: {{package_manager}}
+
+          Create upgrade strategy:
+
+          1. **Upgrade order**: Which dependencies first (resolve conflicts, minimize risk)
+          2. **Risk assessment**: Major version changes, known breaking changes
+          3. **Testing strategy**: What to test after each upgrade
+          4. **Rollback plan**: How to revert if issues found
+
+          Consider:
+          - Security fixes should be prioritized
+          - Major version upgrades need careful testing
+          - Dependencies with many dependents upgraded last
+          - Group compatible upgrades together
+
+          Output structured plan with three phases:
+          - Phase 1: Critical security fixes (must do immediately)
+          - Phase 2: Minor version updates (low risk)
+          - Phase 3: Major version updates (higher risk, needs testing)
+        output: "upgrade_plan"
+        timeout: 300
+
+  # Stage 2: Validation - check compatibility before generating commands
+  - name: "validation"
+    approval:
+      required: true
+      prompt: |
+        DEPENDENCY AUDIT AND UPGRADE PLAN COMPLETE
+
+        Review the assessment before proceeding:
+        - Audit: {{dependency_audit}}
+        - Plan: {{upgrade_plan}}
+
+        Approve to validate compatibility and generate upgrade commands.
+        Deny to stop and review the plan manually.
+    steps:
+      - id: "validate-compatibility"
+        agent: "developer-expertise:integration-specialist"
+        prompt: |
+          Validate compatibility for this upgrade plan: {{upgrade_plan}}
+
+          For project: {{project_path}}
+
+          Check:
+          1. Breaking changes in release notes
+          2. Python version compatibility
+          3. Dependency conflicts (new versions compatible with each other?)
+          4. Known migration issues
+
+          For each proposed upgrade:
+          - Compatibility status (safe / needs-testing / risky)
+          - Breaking changes summary
+          - Migration steps required
+          - Estimated effort
+
+          Flag any upgrades that should be deferred or split into separate work.
+        output: "compatibility_check"
+        timeout: 600
+
+  # Stage 3: Phase 1 - Critical security fixes
+  - name: "phase-1-security"
+    approval:
+      required: true
+      prompt: |
+        COMPATIBILITY VALIDATION COMPLETE
+
+        Review: {{compatibility_check}}
+
+        Ready to generate Phase 1 commands (CRITICAL SECURITY FIXES).
+        These are the highest priority updates that should be applied first.
+
+        Approve to generate Phase 1 upgrade commands.
+    steps:
+      - id: "generate-phase1-commands"
+        agent: "developer-expertise:integration-specialist"
+        prompt: |
+          Generate Phase 1 upgrade commands (CRITICAL SECURITY FIXES).
+
+          Based on:
+          - Upgrade plan: {{upgrade_plan}}
+          - Compatibility check: {{compatibility_check}}
+          - Package manager: {{package_manager}}
+
+          Create ONLY the commands for critical security fixes:
+          1. Exact commands to run
+          2. Pre-upgrade checks (backup, git status)
+          3. Post-upgrade tests to run
+          4. Rollback commands if needed
+
+          Make commands copy-paste ready.
+          Focus ONLY on security-critical updates.
+        output: "phase1_commands"
+        timeout: 300
+
+  # Stage 4: Phase 2 - Minor version updates
+  - name: "phase-2-minor"
+    approval:
+      required: true
+      prompt: |
+        PHASE 1 COMMANDS GENERATED
+
+        Security fix commands: {{phase1_commands}}
+
+        Ready to generate Phase 2 commands (MINOR VERSION UPDATES).
+        These are low-risk updates with backward-compatible changes.
+
+        Approve to generate Phase 2 upgrade commands.
+        You can also deny and execute Phase 1 commands first.
+    steps:
+      - id: "generate-phase2-commands"
+        agent: "developer-expertise:integration-specialist"
+        prompt: |
+          Generate Phase 2 upgrade commands (MINOR VERSION UPDATES).
+
+          Based on:
+          - Upgrade plan: {{upgrade_plan}}
+          - Compatibility check: {{compatibility_check}}
+          - Package manager: {{package_manager}}
+
+          Create ONLY the commands for minor version updates:
+          1. Exact commands to run
+          2. Pre-upgrade checks
+          3. Post-upgrade tests to run
+          4. Rollback commands if needed
+
+          Make commands copy-paste ready.
+          Focus ONLY on minor version updates (not major).
+        output: "phase2_commands"
+        timeout: 300
+
+  # Stage 5: Phase 3 - Major version updates (highest risk)
+  - name: "phase-3-major"
+    approval:
+      required: true
+      prompt: |
+        PHASE 2 COMMANDS GENERATED
+
+        Minor update commands: {{phase2_commands}}
+
+        Ready to generate Phase 3 commands (MAJOR VERSION UPDATES).
+        ⚠️  These carry HIGHER RISK and may require code changes.
+
+        Approve to generate Phase 3 upgrade commands.
+        Deny if you want to stop here and apply earlier phases first.
+    steps:
+      - id: "generate-phase3-commands"
+        agent: "developer-expertise:integration-specialist"
+        prompt: |
+          Generate Phase 3 upgrade commands (MAJOR VERSION UPDATES).
+
+          Based on:
+          - Upgrade plan: {{upgrade_plan}}
+          - Compatibility check: {{compatibility_check}}
+          - Package manager: {{package_manager}}
+
+          Create ONLY the commands for major version updates:
+          1. Exact commands to run
+          2. Pre-upgrade checks (comprehensive backup recommended)
+          3. Post-upgrade tests to run (thorough testing required)
+          4. Rollback commands (essential for major updates)
+          5. Migration steps if API changes detected
+
+          Make commands copy-paste ready.
+          Include warnings about breaking changes.
+          Focus ONLY on major version updates.
+        output: "phase3_commands"
+        timeout: 300
+
+# Output Summary:
+#
+# After full execution, you'll have:
+# - dependency_audit: Complete audit of current state
+# - upgrade_plan: Structured strategy with risk assessment
+# - compatibility_check: Validation of breaking changes
+# - phase1_commands: Critical security fix commands (copy-paste ready)
+# - phase2_commands: Minor update commands (copy-paste ready)
+# - phase3_commands: Major update commands (copy-paste ready)
+#
+# You can stop at any approval gate and execute the commands generated so far.
+# This allows incremental, controlled upgrades with human oversight at each step.

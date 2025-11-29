@@ -4,10 +4,21 @@ import datetime
 import json
 import shutil
 import uuid
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from .models import Recipe
+
+
+class ApprovalStatus(str, Enum):
+    """Approval status for a stage."""
+
+    PENDING = "pending"  # Waiting for approval
+    APPROVED = "approved"  # Approved, proceed to next stage
+    DENIED = "denied"  # Denied, stop execution
+    NOT_REQUIRED = "not_required"  # No approval needed for this stage
+    TIMEOUT = "timeout"  # Timed out waiting for approval
 
 
 def generate_session_id() -> str:
@@ -229,3 +240,190 @@ class SessionManager:
                 continue
 
         return deleted_count
+
+    # === Approval Gate Methods (Phase 3) ===
+
+    def get_stage_approval_status(self, session_id: str, project_path: Path, stage_name: str) -> ApprovalStatus:
+        """Get approval status for a specific stage.
+
+        Args:
+            session_id: Session identifier
+            project_path: Project directory
+            stage_name: Name of the stage
+
+        Returns:
+            ApprovalStatus for the stage
+        """
+        state = self.load_state(session_id, project_path)
+        stage_approvals = state.get("stage_approvals", {})
+        status_str = stage_approvals.get(stage_name, ApprovalStatus.NOT_REQUIRED.value)
+        return ApprovalStatus(status_str)
+
+    def set_stage_approval_status(
+        self,
+        session_id: str,
+        project_path: Path,
+        stage_name: str,
+        status: ApprovalStatus,
+        reason: str | None = None,
+    ) -> None:
+        """Set approval status for a specific stage.
+
+        Args:
+            session_id: Session identifier
+            project_path: Project directory
+            stage_name: Name of the stage
+            status: New approval status
+            reason: Optional reason (e.g., denial reason)
+        """
+        state = self.load_state(session_id, project_path)
+
+        if "stage_approvals" not in state:
+            state["stage_approvals"] = {}
+        if "approval_history" not in state:
+            state["approval_history"] = []
+
+        state["stage_approvals"][stage_name] = status.value
+
+        # Record in history
+        state["approval_history"].append(
+            {
+                "stage": stage_name,
+                "status": status.value,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "reason": reason,
+            }
+        )
+
+        self.save_state(session_id, project_path, state)
+
+    def get_pending_approval(self, session_id: str, project_path: Path) -> dict[str, Any] | None:
+        """Get information about the current pending approval, if any.
+
+        Args:
+            session_id: Session identifier
+            project_path: Project directory
+
+        Returns:
+            Dict with stage info and approval prompt, or None if no pending approval
+        """
+        state = self.load_state(session_id, project_path)
+
+        pending_stage = state.get("pending_approval_stage")
+        if not pending_stage:
+            return None
+
+        return {
+            "session_id": session_id,
+            "recipe_name": state.get("recipe_name", "unknown"),
+            "stage_name": pending_stage,
+            "approval_prompt": state.get("pending_approval_prompt", ""),
+            "approval_timeout": state.get("pending_approval_timeout", 0),
+            "approval_requested_at": state.get("pending_approval_requested_at"),
+            "approval_default": state.get("pending_approval_default", "deny"),
+        }
+
+    def set_pending_approval(
+        self,
+        session_id: str,
+        project_path: Path,
+        stage_name: str,
+        prompt: str,
+        timeout: int,
+        default: str,
+    ) -> None:
+        """Set a pending approval for the session.
+
+        Args:
+            session_id: Session identifier
+            project_path: Project directory
+            stage_name: Stage awaiting approval
+            prompt: Approval prompt to show user
+            timeout: Seconds before timeout
+            default: What happens on timeout ('approve' or 'deny')
+        """
+        state = self.load_state(session_id, project_path)
+
+        state["pending_approval_stage"] = stage_name
+        state["pending_approval_prompt"] = prompt
+        state["pending_approval_timeout"] = timeout
+        state["pending_approval_default"] = default
+        state["pending_approval_requested_at"] = datetime.datetime.now().isoformat()
+
+        # Set stage status to pending
+        if "stage_approvals" not in state:
+            state["stage_approvals"] = {}
+        state["stage_approvals"][stage_name] = ApprovalStatus.PENDING.value
+
+        self.save_state(session_id, project_path, state)
+
+    def clear_pending_approval(self, session_id: str, project_path: Path) -> None:
+        """Clear pending approval after it has been processed."""
+        state = self.load_state(session_id, project_path)
+
+        state.pop("pending_approval_stage", None)
+        state.pop("pending_approval_prompt", None)
+        state.pop("pending_approval_timeout", None)
+        state.pop("pending_approval_default", None)
+        state.pop("pending_approval_requested_at", None)
+
+        self.save_state(session_id, project_path, state)
+
+    def list_pending_approvals(self, project_path: Path) -> list[dict[str, Any]]:
+        """List all sessions with pending approvals.
+
+        Args:
+            project_path: Project directory
+
+        Returns:
+            List of pending approval info dicts
+        """
+        sessions = self.list_sessions(project_path)
+        pending = []
+
+        for session_info in sessions:
+            session_id = session_info["session_id"]
+            approval_info = self.get_pending_approval(session_id, project_path)
+            if approval_info:
+                pending.append(approval_info)
+
+        return pending
+
+    def check_approval_timeout(self, session_id: str, project_path: Path) -> ApprovalStatus | None:
+        """Check if pending approval has timed out.
+
+        Returns:
+            ApprovalStatus if timeout occurred and was applied, None otherwise
+        """
+        approval_info = self.get_pending_approval(session_id, project_path)
+        if not approval_info:
+            return None
+
+        requested_at = approval_info.get("approval_requested_at")
+        timeout = approval_info.get("approval_timeout", 0)
+
+        if not requested_at or timeout == 0:
+            return None  # No timeout configured
+
+        requested_time = datetime.datetime.fromisoformat(requested_at)
+        elapsed = (datetime.datetime.now() - requested_time).total_seconds()
+
+        if elapsed >= timeout:
+            stage_name = approval_info["stage_name"]
+            default = approval_info.get("approval_default", "deny")
+
+            # Apply default action
+            if default == "approve":
+                self.set_stage_approval_status(
+                    session_id, project_path, stage_name, ApprovalStatus.APPROVED, reason="Timeout - auto-approved"
+                )
+                self.clear_pending_approval(session_id, project_path)
+                return ApprovalStatus.APPROVED
+
+            self.set_stage_approval_status(
+                session_id, project_path, stage_name, ApprovalStatus.TIMEOUT, reason="Timeout - auto-denied"
+            )
+            self.clear_pending_approval(session_id, project_path)
+            return ApprovalStatus.TIMEOUT
+
+        return None

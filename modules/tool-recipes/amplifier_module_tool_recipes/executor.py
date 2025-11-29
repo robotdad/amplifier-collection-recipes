@@ -13,6 +13,7 @@ from .expression_evaluator import evaluate_condition
 from .models import Recipe
 from .models import RecursionConfig
 from .models import Step
+from .session import ApprovalStatus
 from .session import SessionManager
 
 
@@ -20,6 +21,21 @@ class SkipRemainingError(Exception):
     """Raised when step fails with on_error='skip_remaining'."""
 
     pass
+
+
+class ApprovalGatePausedError(Exception):
+    """Raised when execution pauses at an approval gate.
+
+    This is not a failure - it signals that the recipe has paused
+    waiting for human approval before continuing to the next stage.
+    Callers should catch this and handle it appropriately (e.g., notify user).
+    """
+
+    def __init__(self, session_id: str, stage_name: str, approval_prompt: str):
+        self.session_id = session_id
+        self.stage_name = stage_name
+        self.approval_prompt = approval_prompt
+        super().__init__(f"Execution paused at stage '{stage_name}' awaiting approval")
 
 
 @dataclass
@@ -126,6 +142,41 @@ class RecipeExecutor:
         # Create or resume session
         is_resuming = session_id is not None
 
+        # Route to staged execution EARLY (staged recipes have different state structure)
+        if recipe.is_staged:
+            # For staged recipes, load minimal state for metadata, let _execute_staged_recipe handle the rest
+            if is_resuming:
+                state = self.session_manager.load_state(session_id, project_path)
+                context = state["context"]
+                session_started = state["started"]
+            else:
+                session_id = self.session_manager.create_session(recipe, project_path, recipe_path)
+                context = {**recipe.context, **context_vars}
+                session_started = datetime.datetime.now().isoformat()
+
+            # Add metadata to context
+            context["recipe"] = {
+                "name": recipe.name,
+                "version": recipe.version,
+                "description": recipe.description,
+            }
+            context["session"] = {
+                "id": session_id,
+                "started": session_started,
+                "project": str(project_path.resolve()),
+            }
+
+            return await self._execute_staged_recipe(
+                recipe=recipe,
+                context=context,
+                project_path=project_path,
+                session_id=session_id,
+                recipe_path=recipe_path,
+                recursion_state=recursion_state,
+                is_resuming=is_resuming,
+            )
+
+        # Flat recipe state loading (uses current_step_index)
         if is_resuming:
             state = self.session_manager.load_state(session_id, project_path)
             current_step_index = state["current_step_index"]
@@ -151,6 +202,10 @@ class RecipeExecutor:
             "project": str(project_path.resolve()),
         }
 
+        # Initialize state for exception handler (will be set during execution)
+        state: dict[str, Any] | None = None
+
+        # Flat mode execution (staged recipes already returned above)
         try:
             # Execute remaining steps
             for i in range(current_step_index, len(recipe.steps)):
@@ -232,7 +287,7 @@ class RecipeExecutor:
 
         except Exception:
             # Save state even on error for resumption
-            if "state" in locals():
+            if state is not None:
                 self.session_manager.save_state(session_id, project_path, state)
             raise
 
@@ -240,6 +295,235 @@ class RecipeExecutor:
         self.session_manager.cleanup_old_sessions(project_path)
 
         return context
+
+    async def _execute_staged_recipe(
+        self,
+        recipe: Recipe,
+        context: dict[str, Any],
+        project_path: Path,
+        session_id: str,
+        recipe_path: Path | None,
+        recursion_state: RecursionState,
+        is_resuming: bool,
+    ) -> dict[str, Any]:
+        """
+        Execute a staged recipe with approval gates.
+
+        Args:
+            recipe: Staged recipe to execute
+            context: Current context variables
+            project_path: Current project directory
+            session_id: Session identifier
+            recipe_path: Optional path to recipe file
+            recursion_state: Recursion tracking state
+            is_resuming: Whether resuming an existing session
+
+        Returns:
+            Final context dict with all step outputs
+
+        Raises:
+            ApprovalGatePausedError: When execution pauses at an approval gate
+        """
+        # Load state for resumption
+        if is_resuming:
+            state = self.session_manager.load_state(session_id, project_path)
+            current_stage_index = state.get("current_stage_index", 0)
+            current_step_in_stage = state.get("current_step_in_stage", 0)
+            completed_stages = state.get("completed_stages", [])
+            completed_steps = state.get("completed_steps", [])
+
+            # Check if we're resuming from a pending approval
+            pending = self.session_manager.get_pending_approval(session_id, project_path)
+            if pending:
+                stage_name = pending["stage_name"]
+                approval_status = self.session_manager.get_stage_approval_status(session_id, project_path, stage_name)
+
+                # Check for timeout
+                timeout_result = self.session_manager.check_approval_timeout(session_id, project_path)
+                if timeout_result == ApprovalStatus.TIMEOUT:
+                    raise ValueError(f"Approval for stage '{stage_name}' timed out and was denied")
+                if timeout_result == ApprovalStatus.APPROVED:
+                    # Auto-approved on timeout, clear and continue
+                    self.session_manager.clear_pending_approval(session_id, project_path)
+                elif approval_status == ApprovalStatus.PENDING:
+                    # Still pending - raise to indicate waiting
+                    raise ApprovalGatePausedError(
+                        session_id=session_id,
+                        stage_name=stage_name,
+                        approval_prompt=pending["approval_prompt"],
+                    )
+                elif approval_status == ApprovalStatus.DENIED:
+                    raise ValueError(f"Execution denied at stage '{stage_name}'")
+                elif approval_status == ApprovalStatus.APPROVED:
+                    # Approved, clear pending and continue
+                    self.session_manager.clear_pending_approval(session_id, project_path)
+        else:
+            current_stage_index = 0
+            current_step_in_stage = 0
+            completed_stages = []
+            completed_steps = []
+
+        try:
+            # Execute stages
+            for stage_idx in range(current_stage_index, len(recipe.stages)):
+                stage = recipe.stages[stage_idx]
+
+                # Add stage metadata to context
+                context["stage"] = {
+                    "name": stage.name,
+                    "index": stage_idx,
+                }
+
+                # Determine starting step within this stage
+                start_step = current_step_in_stage if stage_idx == current_stage_index else 0
+
+                # Execute steps within this stage
+                for step_idx in range(start_step, len(stage.steps)):
+                    step = stage.steps[step_idx]
+
+                    # Add step metadata to context
+                    context["step"] = {"id": step.id, "index": step_idx, "stage": stage.name}
+
+                    # Check condition if present
+                    if step.condition:
+                        try:
+                            condition_result = evaluate_condition(step.condition, context)
+                        except ExpressionError as e:
+                            raise ValueError(f"Step '{step.id}': condition error: {e}") from e
+
+                        if not condition_result:
+                            skipped_steps = context.get("_skipped_steps", [])
+                            skipped_steps.append(step.id)
+                            context["_skipped_steps"] = skipped_steps
+                            continue
+
+                    # Handle foreach loops
+                    if step.foreach:
+                        try:
+                            await self._execute_loop(step, context, project_path, recursion_state, recipe_path)
+                            completed_steps.append(step.id)
+                            self._save_staged_state(
+                                session_id,
+                                project_path,
+                                recipe,
+                                context,
+                                stage_idx,
+                                step_idx + 1,
+                                completed_stages,
+                                completed_steps,
+                            )
+                            continue
+                        except SkipRemainingError:
+                            break
+
+                    # Execute step
+                    try:
+                        if step.type == "recipe":
+                            result = await self._execute_recipe_step(
+                                step, context, project_path, recursion_state, recipe_path
+                            )
+                        else:
+                            recursion_state.increment_steps()
+                            result = await self.execute_step_with_retry(step, context)
+
+                        if step.output:
+                            context[step.output] = result
+
+                        completed_steps.append(step.id)
+                        self._save_staged_state(
+                            session_id,
+                            project_path,
+                            recipe,
+                            context,
+                            stage_idx,
+                            step_idx + 1,
+                            completed_stages,
+                            completed_steps,
+                        )
+
+                    except SkipRemainingError:
+                        break
+
+                # Stage completed - check for approval gate
+                completed_stages.append(stage.name)
+
+                if stage.approval and stage.approval.required:
+                    # Save state with next stage as target FIRST
+                    # (set_pending_approval will load, add approval fields, and save)
+                    self._save_staged_state(
+                        session_id, project_path, recipe, context, stage_idx + 1, 0, completed_stages, completed_steps
+                    )
+
+                    # Set pending approval AFTER saving state (this loads, modifies, saves)
+                    self.session_manager.set_pending_approval(
+                        session_id=session_id,
+                        project_path=project_path,
+                        stage_name=stage.name,
+                        prompt=stage.approval.prompt or f"Approve completion of stage '{stage.name}'?",
+                        timeout=stage.approval.timeout,
+                        default=stage.approval.default,
+                    )
+
+                    # Raise to indicate paused state
+                    raise ApprovalGatePausedError(
+                        session_id=session_id,
+                        stage_name=stage.name,
+                        approval_prompt=stage.approval.prompt or f"Approve completion of stage '{stage.name}'?",
+                    )
+
+                # No approval needed - save progress and continue
+                self._save_staged_state(
+                    session_id, project_path, recipe, context, stage_idx + 1, 0, completed_stages, completed_steps
+                )
+
+        except ApprovalGatePausedError:
+            # Re-raise approval pause (not an error)
+            raise
+        except Exception:
+            # Save state for resumption on error
+            self._save_staged_state(
+                session_id,
+                project_path,
+                recipe,
+                context,
+                current_stage_index,
+                current_step_in_stage,
+                completed_stages,
+                completed_steps,
+            )
+            raise
+
+        # Cleanup old sessions
+        self.session_manager.cleanup_old_sessions(project_path)
+
+        return context
+
+    def _save_staged_state(
+        self,
+        session_id: str,
+        project_path: Path,
+        recipe: Recipe,
+        context: dict[str, Any],
+        stage_index: int,
+        step_in_stage: int,
+        completed_stages: list[str],
+        completed_steps: list[str],
+    ) -> None:
+        """Save state for staged recipe execution."""
+        state = {
+            "session_id": session_id,
+            "recipe_name": recipe.name,
+            "recipe_version": recipe.version,
+            "started": context["session"]["started"],
+            "current_stage_index": stage_index,
+            "current_step_in_stage": step_in_stage,
+            "context": context,
+            "completed_stages": completed_stages,
+            "completed_steps": completed_steps,
+            "project_path": str(project_path.resolve()),
+            "is_staged": True,
+        }
+        self.session_manager.save_state(session_id, project_path, state)
 
     async def execute_step_with_retry(self, step: Step, context: dict[str, Any]) -> Any:
         """
@@ -306,8 +590,8 @@ class RecipeExecutor:
         Returns:
             Step result from agent
         """
-        # Import spawn helper from app layer
-        from amplifier_app_cli.session_spawner import spawn_sub_session
+        # Import spawn helper from app layer (runtime dependency, not available at type-check time)
+        from amplifier_app_cli.session_spawner import spawn_sub_session  # type: ignore[import-not-found]
 
         # Agent steps must have prompt and agent (validated by models)
         if not step.prompt or not step.agent:

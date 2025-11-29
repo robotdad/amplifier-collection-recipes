@@ -7,8 +7,10 @@ from typing import Any
 from amplifier_core import ModuleCoordinator
 from amplifier_core import ToolResult
 
+from .executor import ApprovalGatePausedError
 from .executor import RecipeExecutor
 from .models import Recipe
+from .session import ApprovalStatus
 from .session import SessionManager
 from .validator import validate_recipe
 
@@ -71,18 +73,25 @@ Recipes are declarative YAML specifications that define multi-step agent workflo
 - Agent delegation with context accumulation
 - Automatic checkpointing for resumability
 - Error handling and retry logic
+- Approval gates for human-in-loop workflows (staged recipes)
 
 Operations:
 - execute: Run a recipe from YAML file
 - resume: Resume interrupted session
 - list: List active sessions
 - validate: Validate recipe structure
+- approvals: List pending approvals across sessions
+- approve: Approve a stage to continue execution
+- deny: Deny a stage to stop execution
 
 Example:
   Execute recipe: {{"operation": "execute", "recipe_path": "examples/code-review.yaml", "context": {{"file_path": "src/auth.py"}}}}
   Resume session: {{"operation": "resume", "session_id": "recipe_20251118_143022_a3f2"}}
   List sessions: {{"operation": "list"}}
-  Validate recipe: {{"operation": "validate", "recipe_path": "my-recipe.yaml"}}"""
+  Validate recipe: {{"operation": "validate", "recipe_path": "my-recipe.yaml"}}
+  List approvals: {{"operation": "approvals"}}
+  Approve stage: {{"operation": "approve", "session_id": "...", "stage_name": "planning"}}
+  Deny stage: {{"operation": "deny", "session_id": "...", "stage_name": "planning", "reason": "needs revision"}}"""
 
     @property
     def input_schema(self) -> dict:
@@ -91,8 +100,8 @@ Example:
             "properties": {
                 "operation": {
                     "type": "string",
-                    "enum": ["execute", "resume", "list", "validate"],
-                    "description": "Operation to perform: execute recipe, resume session, list sessions, or validate recipe",
+                    "enum": ["execute", "resume", "list", "validate", "approvals", "approve", "deny"],
+                    "description": "Operation to perform",
                 },
                 "recipe_path": {
                     "type": "string",
@@ -104,7 +113,15 @@ Example:
                 },
                 "session_id": {
                     "type": "string",
-                    "description": "Session ID to resume (required for 'resume' operation)",
+                    "description": "Session ID (required for 'resume', 'approve', 'deny' operations)",
+                },
+                "stage_name": {
+                    "type": "string",
+                    "description": "Stage name to approve or deny (required for 'approve' and 'deny' operations)",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Reason for denial (optional for 'deny' operation)",
                 },
             },
             "required": ["operation"],
@@ -131,6 +148,12 @@ Example:
                 return await self._list_sessions(input)
             if operation == "validate":
                 return await self._validate_recipe(input)
+            if operation == "approvals":
+                return await self._list_approvals(input)
+            if operation == "approve":
+                return await self._approve_stage(input)
+            if operation == "deny":
+                return await self._deny_stage(input)
             return ToolResult(
                 success=False,
                 error={"message": f"Unknown operation: {operation}"},
@@ -187,6 +210,19 @@ Example:
                     "context": final_context,
                 },
             )
+        except ApprovalGatePausedError as e:
+            # Recipe paused at approval gate - not an error
+            return ToolResult(
+                success=True,
+                output={
+                    "status": "paused_for_approval",
+                    "recipe": recipe.name,
+                    "session_id": e.session_id,
+                    "stage_name": e.stage_name,
+                    "approval_prompt": e.approval_prompt,
+                    "message": f"Recipe paused at stage '{e.stage_name}'. Use 'approve' or 'deny' to continue.",
+                },
+            )
         except Exception as e:
             return ToolResult(
                 success=False,
@@ -241,10 +277,23 @@ Example:
             return ToolResult(
                 success=True,
                 output={
-                    "status": "resumed",
+                    "status": "completed",
                     "recipe": recipe.name,
                     "session_id": session_id,
                     "context": final_context,
+                },
+            )
+        except ApprovalGatePausedError as e:
+            # Recipe paused at another approval gate
+            return ToolResult(
+                success=True,
+                output={
+                    "status": "paused_for_approval",
+                    "recipe": recipe.name,
+                    "session_id": e.session_id,
+                    "stage_name": e.stage_name,
+                    "approval_prompt": e.approval_prompt,
+                    "message": f"Recipe paused at stage '{e.stage_name}'. Use 'approve' or 'deny' to continue.",
                 },
             )
         except Exception as e:
@@ -314,4 +363,149 @@ Example:
             return ToolResult(
                 success=False,
                 error={"message": f"Failed to validate recipe: {str(e)}"},
+            )
+
+    async def _list_approvals(self, input: dict[str, Any]) -> ToolResult:
+        """List pending approvals across all sessions."""
+        project_path = Path.cwd()
+
+        try:
+            pending_approvals = self.session_manager.list_pending_approvals(project_path)
+
+            return ToolResult(
+                success=True,
+                output={
+                    "pending_approvals": pending_approvals,
+                    "count": len(pending_approvals),
+                },
+            )
+        except Exception as e:
+            return ToolResult(
+                success=False,
+                error={"message": f"Failed to list approvals: {str(e)}"},
+            )
+
+    async def _approve_stage(self, input: dict[str, Any]) -> ToolResult:
+        """Approve a stage to continue execution."""
+        session_id = input.get("session_id")
+        stage_name = input.get("stage_name")
+
+        if not session_id:
+            return ToolResult(success=False, error={"message": "session_id is required for approve operation"})
+        if not stage_name:
+            return ToolResult(success=False, error={"message": "stage_name is required for approve operation"})
+
+        project_path = Path.cwd()
+
+        # Verify session exists
+        if not self.session_manager.session_exists(session_id, project_path):
+            return ToolResult(
+                success=False,
+                error={"message": f"Session not found: {session_id}"},
+            )
+
+        # Check if there's a pending approval for this stage
+        pending = self.session_manager.get_pending_approval(session_id, project_path)
+        if not pending:
+            return ToolResult(
+                success=False,
+                error={"message": f"No pending approval for session: {session_id}"},
+            )
+
+        if pending["stage_name"] != stage_name:
+            return ToolResult(
+                success=False,
+                error={
+                    "message": f"Stage mismatch: pending approval is for '{pending['stage_name']}', not '{stage_name}'"
+                },
+            )
+
+        try:
+            # Set approval status
+            self.session_manager.set_stage_approval_status(
+                session_id=session_id,
+                project_path=project_path,
+                stage_name=stage_name,
+                status=ApprovalStatus.APPROVED,
+                reason="Approved by user",
+            )
+
+            return ToolResult(
+                success=True,
+                output={
+                    "status": "approved",
+                    "session_id": session_id,
+                    "stage_name": stage_name,
+                    "message": f"Stage '{stage_name}' approved. Use 'resume' operation to continue execution.",
+                },
+            )
+        except Exception as e:
+            return ToolResult(
+                success=False,
+                error={"message": f"Failed to approve stage: {str(e)}"},
+            )
+
+    async def _deny_stage(self, input: dict[str, Any]) -> ToolResult:
+        """Deny a stage to stop execution."""
+        session_id = input.get("session_id")
+        stage_name = input.get("stage_name")
+        reason = input.get("reason", "Denied by user")
+
+        if not session_id:
+            return ToolResult(success=False, error={"message": "session_id is required for deny operation"})
+        if not stage_name:
+            return ToolResult(success=False, error={"message": "stage_name is required for deny operation"})
+
+        project_path = Path.cwd()
+
+        # Verify session exists
+        if not self.session_manager.session_exists(session_id, project_path):
+            return ToolResult(
+                success=False,
+                error={"message": f"Session not found: {session_id}"},
+            )
+
+        # Check if there's a pending approval for this stage
+        pending = self.session_manager.get_pending_approval(session_id, project_path)
+        if not pending:
+            return ToolResult(
+                success=False,
+                error={"message": f"No pending approval for session: {session_id}"},
+            )
+
+        if pending["stage_name"] != stage_name:
+            return ToolResult(
+                success=False,
+                error={
+                    "message": f"Stage mismatch: pending approval is for '{pending['stage_name']}', not '{stage_name}'"
+                },
+            )
+
+        try:
+            # Set denial status
+            self.session_manager.set_stage_approval_status(
+                session_id=session_id,
+                project_path=project_path,
+                stage_name=stage_name,
+                status=ApprovalStatus.DENIED,
+                reason=reason,
+            )
+
+            # Clear the pending approval
+            self.session_manager.clear_pending_approval(session_id, project_path)
+
+            return ToolResult(
+                success=True,
+                output={
+                    "status": "denied",
+                    "session_id": session_id,
+                    "stage_name": stage_name,
+                    "reason": reason,
+                    "message": f"Stage '{stage_name}' denied. Recipe execution will not continue.",
+                },
+            )
+        except Exception as e:
+            return ToolResult(
+                success=False,
+                error={"message": f"Failed to deny stage: {str(e)}"},
             )
