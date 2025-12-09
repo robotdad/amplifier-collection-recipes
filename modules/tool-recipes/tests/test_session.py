@@ -202,7 +202,7 @@ class TestSessionManager:
         old_time = datetime.datetime.now() - datetime.timedelta(days=10)
         state["started"] = old_time.isoformat()
 
-        with open(state_file, "w") as f:
+        with open(state_file, "w", encoding="utf-8") as f:
             json.dump(state, f)
 
         # Cleanup with 7 day threshold
