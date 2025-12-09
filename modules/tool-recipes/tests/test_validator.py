@@ -128,6 +128,53 @@ class TestCheckVariableReferences:
         assert len(errors) == 1
         assert "unknown" in errors[0].lower()
 
+    def test_known_namespace_from_step_output(self):
+        """Known namespace from step output should be valid for nested field references."""
+        recipe = Recipe(
+            name="test",
+            description="test",
+            version="1.0.0",
+            steps=[
+                Step(id="s1", agent="a", prompt="First step", output="structure"),
+                Step(id="s2", agent="b", prompt="Use {{structure.provider_file}} and {{structure.provider_class}}"),
+            ],
+        )
+        errors = check_variable_references(recipe)
+        assert len(errors) == 0  # Should be valid - namespace exists from step output
+
+    def test_nested_reference_in_context_with_known_namespace(self):
+        """Nested field references in step context should work with known namespaces."""
+        recipe = Recipe(
+            name="test",
+            description="test",
+            version="1.0.0",
+            steps=[
+                Step(id="s1", agent="a", prompt="First", output="config"),
+                Step(
+                    id="s2",
+                    recipe="some-recipe.yaml",
+                    step_context={"file": "{{config.main_file}}", "class": "{{config.provider_class}}"},
+                    depends_on=["s1"],
+                ),
+            ],
+        )
+        errors = check_variable_references(recipe)
+        assert len(errors) == 0  # Should be valid
+
+    def test_nested_reference_in_recipe_path_with_known_namespace(self):
+        """Nested field references in recipe paths should work with known namespaces."""
+        recipe = Recipe(
+            name="test",
+            description="test",
+            version="1.0.0",
+            steps=[
+                Step(id="s1", agent="a", prompt="Get path", output="paths"),
+                Step(id="s2", recipe="{{paths.recipe_dir}}/sub-recipe.yaml", agent="b", prompt="Run"),
+            ],
+        )
+        errors = check_variable_references(recipe)
+        assert len(errors) == 0  # Should be valid
+
 
 class TestCheckStepDependencies:
     """Tests for check_step_dependencies function."""
