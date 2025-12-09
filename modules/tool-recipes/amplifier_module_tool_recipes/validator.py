@@ -80,7 +80,8 @@ def check_variable_references(recipe: Recipe) -> list[str]:
                 # Check if it's a nested reference (recipe.name, session.id, etc.)
                 if "." in var:
                     prefix = var.split(".")[0]
-                    if prefix not in reserved:
+                    # Check if prefix is in reserved (recipe/session/step) OR available (step outputs)
+                    if prefix not in reserved and prefix not in available and prefix not in step_local_vars:
                         errors.append(
                             f"Step '{step.id}': Variable {{{{{var}}}}} references unknown namespace '{prefix}'"
                         )
@@ -98,7 +99,8 @@ def check_variable_references(recipe: Recipe) -> list[str]:
                     for var in context_vars:
                         if "." in var:
                             prefix = var.split(".")[0]
-                            if prefix not in reserved:
+                            # Check if prefix is in reserved (recipe/session/step) OR available (step outputs)
+                            if prefix not in reserved and prefix not in available and prefix not in step_local_vars:
                                 errors.append(
                                     f"Step '{step.id}': Context key '{key}' variable {{{{{var}}}}} references unknown namespace '{prefix}'"
                                 )
@@ -114,7 +116,8 @@ def check_variable_references(recipe: Recipe) -> list[str]:
             for var in recipe_vars:
                 if "." in var:
                     prefix = var.split(".")[0]
-                    if prefix not in reserved:
+                    # Check if prefix is in reserved (recipe/session/step) OR available (step outputs)
+                    if prefix not in reserved and prefix not in available and prefix not in step_local_vars:
                         errors.append(
                             f"Step '{step.id}': Recipe path variable {{{{{var}}}}} references unknown namespace '{prefix}'"
                         )

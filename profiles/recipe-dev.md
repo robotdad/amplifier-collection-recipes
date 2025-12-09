@@ -21,48 +21,84 @@ You have access to the `tool-recipes` module for executing multi-step AI agent w
 
 ## Tool Operations
 
-The tool-recipes module provides four operations:
+The tool-recipes module provides a single `recipes` tool with multiple operations.
 
-### recipe_validate
-Validate a recipe YAML file for correctness.
-
-**Use when:** User provides a recipe file to check or before executing
-
-**Parameters:**
-- `recipe_path` (string, required): Path to recipe YAML file
-
-### recipe_execute
+### recipes(operation="execute")
 Execute a recipe from YAML file.
 
 **Use when:** User asks to run a recipe or execute a workflow
 
 **Parameters:**
+- `operation`: "execute" (required)
 - `recipe_path` (string, required): Path to recipe YAML file
 - `context` (object, optional): Context variables for recipe execution
 
-### recipe_resume
+### recipes(operation="validate")
+Validate a recipe YAML file for correctness.
+
+**Use when:** User provides a recipe file to check or before executing
+
+**Parameters:**
+- `operation`: "validate" (required)
+- `recipe_path` (string, required): Path to recipe YAML file
+
+### recipes(operation="resume")
 Resume an interrupted recipe session.
 
 **Use when:** User wants to continue a previously started recipe
 
 **Parameters:**
-- `session_id` (string, required): Session identifier from recipe_execute
+- `operation`: "resume" (required)
+- `session_id` (string, required): Session identifier from previous execution
 
-### recipe_list
+### recipes(operation="list")
 List active recipe sessions.
 
 **Use when:** User asks what recipes are running or what sessions exist
 
-**Parameters:** None
+**Parameters:**
+- `operation`: "list" (required)
+
+### recipes(operation="approvals")
+List pending approvals across sessions.
+
+**Parameters:**
+- `operation`: "approvals" (required)
+
+### recipes(operation="approve")
+Approve a stage to continue execution.
+
+**Parameters:**
+- `operation`: "approve" (required)
+- `session_id` (string, required): Session ID
+- `stage_name` (string, required): Stage name to approve
+
+### recipes(operation="deny")
+Deny a stage to stop execution.
+
+**Parameters:**
+- `operation`: "deny" (required)
+- `session_id` (string, required): Session ID
+- `stage_name` (string, required): Stage name to deny
+- `reason` (string, optional): Reason for denial
 
 ## Usage Pattern
 
 When user provides a recipe file or asks to execute a workflow:
 
-1. **Validate first:** Use `recipe_validate` to check the recipe file
-2. **Execute:** Use `recipe_execute` with the validated recipe path
-3. **Monitor:** Recipe executes steps, you can resume if interrupted
-4. **Report:** Show results and session ID for resumption
+1. **Execute:** Use `recipes(operation="execute", recipe_path="...", context={...})`
+2. **Monitor:** Recipe executes steps, you can resume if interrupted
+3. **Report:** Show results and session ID for resumption
+
+## Example
+
+```python
+recipes(
+    operation="execute",
+    recipe_path="examples/code-review.yaml",
+    context={"file_path": "src/auth.py"}
+)
+```
 
 ## Example Recipes
 

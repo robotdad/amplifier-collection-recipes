@@ -49,6 +49,45 @@ This installs:
 - tool-recipes module (available to all profiles)
 - recipe-author agent (available globally for conversational authoring)
 
+## Using the Collection
+
+After installation, you need to activate recipe capabilities in your profile.
+
+### Use the Provided Profile (Recommended)
+
+The collection includes a `recipe-dev` profile that bundles the tool configuration and AI context:
+
+```bash
+amplifier profile use recipes:recipe-dev
+```
+
+This profile extends `developer-expertise:dev` and adds recipe execution capabilities.
+
+### Add to Your Existing Profile
+
+Alternatively, add the tool to your own profile by editing your profile file:
+
+```yaml
+tools:
+  - module: tool-recipes
+    source: recipes:modules/tool-recipes
+    config:
+      session_dir: ~/.amplifier/projects
+      auto_cleanup_days: 7
+```
+
+### Verify Installation
+
+Check that the tool is available:
+
+```bash
+# Validate a recipe to confirm tool is working
+amplifier run "validate recipe examples/simple-analysis-recipe.yaml"
+
+# List available profiles
+amplifier profile list
+```
+
 ## Quick Start
 
 ### Execute a Recipe
@@ -163,7 +202,9 @@ The `templates/` directory provides starter recipes:
 
 - **simple-recipe.yaml** - Basic sequential workflow
 - **multi-step-recipe.yaml** - Complex multi-stage processing
-- **conditional-recipe.yaml** - Branching based on outcomes (future)
+- **error-handling-recipe.yaml** - Retry and error handling patterns
+
+See `examples/conditional-workflow.yaml` for conditional execution patterns.
 
 Copy, customize, and run.
 

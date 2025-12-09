@@ -63,8 +63,8 @@ description: "Systematic dependency upgrade with audit, planning, and validation
 
 **Type:** string (semantic versioning)
 **Constraints:**
-- Must follow semver: `MAJOR.MINOR.PATCH`
-- Example: `1.0.0`, `2.3.1`, `0.1.0-beta`
+- Must follow semver: `MAJOR.MINOR.PATCH` (no pre-release tags)
+- Example: `1.0.0`, `2.3.1`, `0.1.0`
 
 **Purpose:** Track recipe evolution and compatibility.
 
@@ -77,7 +77,7 @@ description: "Systematic dependency upgrade with audit, planning, and validation
 ```yaml
 version: "1.0.0"
 version: "2.1.3"
-version: "0.5.0-alpha"
+version: "0.5.0"
 ```
 
 #### `author` (optional)
@@ -178,7 +178,7 @@ recursion:
 - Exceeding limits raises error immediately
 - Child recipes inherit limits unless overridden at step level
 
-#### `steps` (required)
+#### `steps` (required for flat mode)
 
 **Type:** list of Step objects
 **Constraints:**
@@ -186,7 +186,244 @@ recursion:
 - Step IDs must be unique within recipe
 - Steps execute in order
 
-**Purpose:** Define the workflow.
+**Purpose:** Define the workflow in flat mode (sequential steps without approval gates).
+
+**Note:** Recipes must use EITHER `steps` (flat mode) OR `stages` (staged mode with approval gates), not both.
+
+#### `stages` (required for staged mode)
+
+**Type:** list of Stage objects
+**Constraints:**
+- At least one stage required
+- Stage names must be unique within recipe
+- Stages execute in order
+- Each stage can have an approval gate
+
+**Purpose:** Define the workflow in staged mode with optional approval gates between stages.
+
+**Note:** Recipes must use EITHER `steps` (flat mode) OR `stages` (staged mode with approval gates), not both.
+
+---
+
+## Recipe Modes: Flat vs Staged
+
+Recipes support two execution modes. You must choose one mode per recipe - they cannot be mixed.
+
+### Flat Mode (Sequential Steps)
+
+**When to use:**
+- Simple workflows without human checkpoints
+- Automated processes that should run without interruption
+- Development and testing scenarios
+
+**Structure:**
+```yaml
+name: "simple-workflow"
+version: "1.0.0"
+description: "Sequential processing without approval gates"
+
+steps:
+  - id: "analyze"
+    agent: "analyzer"
+    prompt: "Analyze {{input}}"
+    output: "analysis"
+  
+  - id: "process"
+    agent: "processor"
+    prompt: "Process {{analysis}}"
+    output: "result"
+```
+
+**Characteristics:**
+- Steps execute sequentially
+- No human intervention required
+- Fails fast on errors
+- Resume from last successful step on interruption
+
+### Staged Mode (Multi-Stage with Approval Gates)
+
+**When to use:**
+- High-stakes operations requiring human oversight
+- Workflows where you want to review results before continuing
+- Processes with distinct phases that need sign-off
+- Situations where you might want to stop execution between phases
+
+**Structure:**
+```yaml
+name: "staged-workflow"
+version: "2.0.0"
+description: "Multi-stage process with approval gates"
+
+stages:
+  - name: "planning"
+    steps:
+      - id: "analyze"
+        agent: "analyzer"
+        prompt: "Analyze {{input}}"
+        output: "analysis"
+    approval:
+      required: true
+      prompt: "Review analysis before proceeding to execution?"
+      timeout: 3600  # 1 hour
+      default: "deny"
+  
+  - name: "execution"
+    steps:
+      - id: "execute"
+        agent: "executor"
+        prompt: "Execute based on {{analysis}}"
+        output: "result"
+```
+
+**Characteristics:**
+- Stages execute sequentially
+- Optional approval gates between stages
+- Execution pauses at approval gates
+- Resume after approval/denial via separate commands
+- All steps within a stage execute together
+
+### Approval Gates
+
+Approval gates provide human-in-loop checkpoints between stages.
+
+**Configuration:**
+```yaml
+approval:
+  required: boolean       # Whether approval is needed (default: false)
+  prompt: string         # Message shown to user
+  timeout: integer       # Seconds to wait (0 = wait forever)
+  default: string        # "approve" or "deny" on timeout (default: "deny")
+```
+
+**Workflow:**
+
+1. **Stage completes** → Recipe pauses at approval gate
+2. **Tool returns status:** `paused_for_approval` with session_id and stage_name
+3. **User reviews** → Decides to approve or deny
+4. **User approves/denies:**
+   ```bash
+   # Approve and continue
+   amplifier run "approve recipe session <session-id> stage <stage-name>"
+   
+   # Deny and stop
+   amplifier run "deny recipe session <session-id> stage <stage-name>"
+   ```
+5. **Resume execution:**
+   ```bash
+   amplifier run "resume recipe session <session-id>"
+   ```
+
+**List pending approvals:**
+```bash
+amplifier run "list pending approvals"
+```
+
+**Example with timeout:**
+```yaml
+approval:
+  required: true
+  prompt: "Review security audit results. Critical findings require immediate action."
+  timeout: 7200  # 2 hours
+  default: "deny"  # Auto-deny if no response
+```
+
+### Choosing Between Modes
+
+| Consideration | Flat Mode | Staged Mode |
+|--------------|-----------|-------------|
+| Human oversight needed? | No | Yes |
+| Can pause between phases? | No (only on error) | Yes (approval gates) |
+| Complexity | Simple | More complex |
+| Use case | Automation, development | Production, high-stakes ops |
+| Resume behavior | Resume from failed step | Resume after approval |
+
+**Migration path:**
+- Start with flat mode for simplicity
+- Upgrade to staged mode when human oversight becomes necessary
+- Version bump: Changing from flat to staged is a breaking change (major version)
+
+---
+
+## Stage Object
+
+A Stage groups multiple steps together with an optional approval gate. Stages are only used in staged mode recipes.
+
+```yaml
+- name: string                  # Required - Unique stage name
+  steps: list[Step]            # Required - At least one step
+  approval: ApprovalConfig     # Optional - Approval gate configuration
+```
+
+### Stage Fields
+
+#### `name` (required)
+
+**Type:** string
+**Constraints:**
+- Must be unique within recipe
+- Alphanumeric with hyphens, underscores, and spaces allowed
+- Max length: 100 characters
+
+**Purpose:** Identifies the stage in logs, UI, and approval operations.
+
+**Examples:**
+```yaml
+- name: "planning"
+- name: "security-review"
+- name: "Phase 1: Critical Fixes"
+```
+
+#### `steps` (required)
+
+**Type:** list of Step objects
+**Constraints:**
+- At least one step required
+- Step IDs must be unique across ALL stages in recipe
+- Steps within stage execute sequentially
+
+**Purpose:** Define the work performed in this stage.
+
+#### `approval` (optional)
+
+**Type:** ApprovalConfig object
+
+**Purpose:** Define an approval gate that pauses execution after this stage completes.
+
+**Structure:**
+```yaml
+approval:
+  required: boolean       # Default: false
+  prompt: string         # Required if required=true
+  timeout: integer       # Seconds, 0=forever (default: 0)
+  default: string        # "approve" or "deny" (default: "deny")
+```
+
+**Behavior:**
+- If `required: false` or omitted, stage completes without pausing
+- If `required: true`, execution pauses after stage and waits for approval
+- User must explicitly approve or deny to continue
+- On timeout, applies `default` action
+
+**Example:**
+```yaml
+- name: "analysis"
+  steps:
+    - id: "audit"
+      agent: "auditor"
+      prompt: "Audit security"
+      output: "findings"
+  approval:
+    required: true
+    prompt: |
+      Security audit complete. Review findings before proceeding:
+      {{findings}}
+      
+      Approve to continue with fixes.
+    timeout: 3600
+    default: "deny"
+```
+
+**See also:** [Approval Gates](#approval-gates) for complete workflow details.
 
 ---
 
@@ -375,24 +612,33 @@ See [Recipe Composition](#recipe-composition) for complete details on recipe ste
 #### `mode` (optional)
 
 **Type:** string
-**Purpose:** Specify agent mode if agent supports multiple modes.
+**Purpose:** Specify how an agent should operate. Modes are agent-specific - consult each agent's documentation to see what modes it supports.
 
-**Example (zen-architect modes):**
+**How it works:** The mode string is prepended to the instruction as `"MODE: {mode}\n\n"` when spawning the agent. Agents that support modes will recognize this prefix and adjust their behavior accordingly.
+
+**Example (zen-architect):**
+
+The `developer-expertise:zen-architect` agent supports three modes:
+- `ANALYZE`: For breaking down problems and designing solutions
+- `ARCHITECT`: For system design and module specification
+- `REVIEW`: For code quality assessment and recommendations
+
 ```yaml
-- agent: "zen-architect"
-  mode: "ANALYZE"    # Analysis mode
+- id: "design"
+  agent: "developer-expertise:zen-architect"
+  mode: "ARCHITECT"
+  prompt: "Design a caching layer for the API"
 
-- agent: "zen-architect"
-  mode: "ARCHITECT"  # Design mode
-
-- agent: "zen-architect"
-  mode: "REVIEW"     # Review mode
+- id: "review"
+  agent: "developer-expertise:zen-architect"
+  mode: "REVIEW"
+  prompt: "Review the implementation for simplicity and maintainability"
 ```
 
-**Behavior:**
-- If omitted, agent uses default mode
-- If specified but agent doesn't support modes, ignored with warning
-- Mode passed to agent via context injection
+**Important notes:**
+- Not all agents support modes. If an agent doesn't recognize the MODE prefix, it will simply treat it as part of the instruction text.
+- Modes are defined by each agent. See agent documentation (e.g., `@developer-expertise:agents/zen-architect.md`) for supported modes and their meanings.
+- If omitted, the agent uses its default behavior.
 
 #### `prompt` (required)
 
